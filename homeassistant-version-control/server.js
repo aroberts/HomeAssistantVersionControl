@@ -73,28 +73,28 @@ console.error = function (...args) {
 
 
 
-/**
- * Read a sensitive env var with _FILE fallback.
- * If VAR is set, use it. Otherwise if VAR_FILE is set, read the file.
- */
-function readSecret(envName) {
-  const direct = process.env[envName];
-  if (direct) return direct;
-
-  const filePath = process.env[`${envName}_FILE`];
-  if (filePath) {
-    try {
-      const value = fs.readFileSync(filePath, 'utf-8').trim();
-      if (value) {
-        console.log(`[init] Loaded ${envName} from ${envName}_FILE`);
-        return value;
-      }
-    } catch (e) {
-      console.error(`[init] Failed to read ${envName}_FILE (${filePath}): ${e.message}`);
+// Resolve *_FILE env vars: if FOO_FILE is set and FOO is not, read the file
+// and populate FOO. This lets any app env var be set via Docker secrets.
+// Scoped to known app vars to avoid clobbering unrelated _FILE vars (e.g. NPM_CONFIG_FILE).
+const FILE_ENV_ALLOWLIST = new Set([
+  'SUPERVISOR_TOKEN', 'HASSIO_TOKEN', 'HA_URL',
+  'CONFIG_PATH', 'PORT', 'HOST',
+  'DEBOUNCE_TIME', 'DEBOUNCE_TIME_UNIT',
+  'HISTORY_RETENTION', 'RETENTION_TYPE', 'RETENTION_VALUE', 'RETENTION_UNIT',
+]);
+for (const baseName of FILE_ENV_ALLOWLIST) {
+  if (process.env[baseName]) continue; // explicit var takes precedence
+  const filePath = process.env[`${baseName}_FILE`];
+  if (!filePath) continue;
+  try {
+    const value = fs.readFileSync(filePath, 'utf-8').trim();
+    if (value) {
+      process.env[baseName] = value;
+      console.log(`[init] Loaded ${baseName} from ${baseName}_FILE`);
     }
+  } catch (e) {
+    console.error(`[init] Failed to read ${baseName}_FILE (${filePath}): ${e.message}`);
   }
-
-  return undefined;
 }
 
 const app = express();
@@ -178,25 +178,6 @@ app.get('/metrics', async (req, res) => {
   }
 });
 
-// Optional API key middleware (opt-in via HAVC_API_KEY env var or HAVC_API_KEY_FILE)
-const HAVC_API_KEY = readSecret('HAVC_API_KEY');
-if (HAVC_API_KEY) {
-  console.log('[auth] API key authentication enabled');
-  app.use((req, res, next) => {
-    // Exempt non-API paths, health check, and metrics
-    if (!req.path.startsWith('/api/') || req.path === '/api/health') {
-      return next();
-    }
-
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.slice(7) !== HAVC_API_KEY) {
-      console.log(`[auth] Unauthorized request to ${req.path} from ${req.ip}`);
-      return res.status(401).json({ success: false, error: 'Unauthorized' });
-    }
-
-    next();
-  });
-}
 
 // Static files - serve public directory at root
 // Add cache control headers for JSON files to prevent stale translations
@@ -224,42 +205,24 @@ app.get('/favicon.ico', (req, res) => {
 // Helper function to call Home Assistant services via Supervisor API
 async function callHomeAssistantService(domain, service, serviceData = {}) {
   try {
-    // Try multiple ways to get the supervisor token
+    // Resolve supervisor token: env var (or _FILE, resolved at startup), or legacy s6 paths
     let supervisorToken = process.env.SUPERVISOR_TOKEN || process.env.HASSIO_TOKEN;
 
-    // If not in env, try reading from the token file
+    // Legacy fallback: s6-overlay environment directory (common in HA addons)
     if (!supervisorToken) {
-      try {
-        supervisorToken = await fsPromises.readFile('/run/secrets/supervisor_token', 'utf-8');
-        supervisorToken = supervisorToken.trim();
-      } catch (e) {
-        // Token file doesn't exist
-      }
-    }
-
-    // If still not found, try s6-overlay environment directory (common in HA addons)
-    if (!supervisorToken) {
-      try {
-        supervisorToken = await fsPromises.readFile('/var/run/s6/container_environment/SUPERVISOR_TOKEN', 'utf-8');
-        supervisorToken = supervisorToken.trim();
-      } catch (e) {
-        // s6 env file doesn't exist
-      }
-    }
-
-    // Try HASSIO_TOKEN from s6 as well
-    if (!supervisorToken) {
-      try {
-        supervisorToken = await fsPromises.readFile('/var/run/s6/container_environment/HASSIO_TOKEN', 'utf-8');
-        supervisorToken = supervisorToken.trim();
-      } catch (e) {
-        // s6 env file doesn't exist
+      for (const name of ['SUPERVISOR_TOKEN', 'HASSIO_TOKEN']) {
+        try {
+          supervisorToken = fs.readFileSync(`/var/run/s6/container_environment/${name}`, 'utf-8').trim();
+          if (supervisorToken) break;
+        } catch {
+          // s6 env file doesn't exist
+        }
       }
     }
 
     if (!supervisorToken) {
       console.log('[HA API] SUPERVISOR_TOKEN not available, skipping service call');
-      console.log('[HA API] Tried: SUPERVISOR_TOKEN, HASSIO_TOKEN env vars and /run/secrets/supervisor_token file');
+      console.log('[HA API] Tried: SUPERVISOR_TOKEN, HASSIO_TOKEN env vars/_FILE and s6 paths');
 
       return { success: false, error: 'SUPERVISOR_TOKEN not available' };
     }
