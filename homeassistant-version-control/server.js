@@ -678,6 +678,12 @@ function redactSettings(settings) {
     const hasToken = !!redacted.cloudSync.authToken;
     delete redacted.cloudSync.authToken;
     redacted.cloudSync.hasAuthToken = hasToken;
+    // Mask embedded credentials in URLs (https://token@host/...)
+    for (const key of ['remoteUrl', 'githubRemoteUrl', 'customRemoteUrl']) {
+      if (redacted.cloudSync[key]) {
+        redacted.cloudSync[key] = redacted.cloudSync[key].replace(/:\/\/([^@]+)@/, '://***@');
+      }
+    }
   }
   return redacted;
 }
