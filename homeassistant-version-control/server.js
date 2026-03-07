@@ -26,6 +26,13 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'js-yaml';
 import { execSync } from 'child_process';
+import { safePath, isValidCommitHash, isAllowedOrigin } from './utils/validate.js';
+import {
+  collectMetrics, pushTotal, pushDuration, lastPushTimestamp,
+  autoCommitsTotal, commitLinesAdded, commitLinesRemoved,
+  fileWatcherActive, fileChangeEvents, retentionCleanupTotal,
+  retentionCleanupDuration, settingsSavesTotal, classifyPushError
+} from './utils/metrics.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -66,6 +73,30 @@ console.error = function (...args) {
 
 
 
+/**
+ * Read a sensitive env var with _FILE fallback.
+ * If VAR is set, use it. Otherwise if VAR_FILE is set, read the file.
+ */
+function readSecret(envName) {
+  const direct = process.env[envName];
+  if (direct) return direct;
+
+  const filePath = process.env[`${envName}_FILE`];
+  if (filePath) {
+    try {
+      const value = fs.readFileSync(filePath, 'utf-8').trim();
+      if (value) {
+        console.log(`[init] Loaded ${envName} from ${envName}_FILE`);
+        return value;
+      }
+    } catch (e) {
+      console.error(`[init] Failed to read ${envName}_FILE (${filePath}): ${e.message}`);
+    }
+  }
+
+  return undefined;
+}
+
 const app = express();
 const PORT = process.env.PORT || 54001;
 const HOST = process.env.HOST || '::';
@@ -95,12 +126,8 @@ app.use((req, res, next) => {
   // Get the origin from the request
   const origin = req.headers.origin;
 
-  // Allow any localhost variation
-  if (origin && (origin.includes('localhost') ||
-    origin.includes('127.0.0.1') ||
-    origin.includes('192.168.') ||
-    origin.includes('10.') ||
-    origin.includes('172.'))) {
+  // Validate origin against localhost and RFC 1918 private ranges
+  if (origin && isAllowedOrigin(origin)) {
     res.header('Access-Control-Allow-Origin', origin);
   }
 
@@ -139,6 +166,37 @@ app.use((req, res, next) => {
 
   next();
 });
+
+// Prometheus metrics endpoint (always unauthenticated)
+app.get('/metrics', async (req, res) => {
+  try {
+    const output = await collectMetrics();
+    res.set('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+    res.send(output);
+  } catch (error) {
+    res.status(500).send('# Error collecting metrics\n');
+  }
+});
+
+// Optional API key middleware (opt-in via HAVC_API_KEY env var or HAVC_API_KEY_FILE)
+const HAVC_API_KEY = readSecret('HAVC_API_KEY');
+if (HAVC_API_KEY) {
+  console.log('[auth] API key authentication enabled');
+  app.use((req, res, next) => {
+    // Exempt non-API paths, health check, and metrics
+    if (!req.path.startsWith('/api/') || req.path === '/api/health') {
+      return next();
+    }
+
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.slice(7) !== HAVC_API_KEY) {
+      console.log(`[auth] Unauthorized request to ${req.path} from ${req.ip}`);
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    next();
+  });
+}
 
 // Static files - serve public directory at root
 // Add cache control headers for JSON files to prevent stale translations
@@ -202,9 +260,6 @@ async function callHomeAssistantService(domain, service, serviceData = {}) {
     if (!supervisorToken) {
       console.log('[HA API] SUPERVISOR_TOKEN not available, skipping service call');
       console.log('[HA API] Tried: SUPERVISOR_TOKEN, HASSIO_TOKEN env vars and /run/secrets/supervisor_token file');
-
-      // Debug: Print available environment keys
-      console.log('[HA API] Available environment variables:', Object.keys(process.env).join(', '));
 
       return { success: false, error: 'SUPERVISOR_TOKEN not available' };
     }
@@ -637,11 +692,31 @@ async function saveRuntimeSettings() {
     console.log(`[settings] Saving settings to ${settingsPath}...`);
 
     await fsPromises.writeFile(settingsPath, JSON.stringify(runtimeSettings, null, 2), 'utf-8');
-    console.log('[settings] Successfully saved runtime settings');
+    try {
+      await fsPromises.chmod(settingsPath, 0o600);
+    } catch {
+      // chmod may fail on some filesystems (e.g. CIFS)
+    }
+    console.log('[settings] Saved runtime-settings.json (mode: 0600)');
+    settingsSavesTotal.inc();
   } catch (error) {
     console.error('[settings] Failed to save runtime settings:', error);
     // Don't throw, just log, so we don't crash requests
   }
+}
+
+/**
+ * Redact sensitive fields from settings for API responses
+ */
+function redactSettings(settings) {
+  const redacted = { ...settings };
+  if (redacted.cloudSync) {
+    redacted.cloudSync = { ...redacted.cloudSync };
+    const hasToken = !!redacted.cloudSync.authToken;
+    delete redacted.cloudSync.authToken;
+    redacted.cloudSync.hasAuthToken = hasToken;
+  }
+  return redacted;
 }
 
 /**
@@ -1002,7 +1077,7 @@ app.get('/api/runtime-settings', async (req, res) => {
   try {
     res.json({
       success: true,
-      settings: runtimeSettings
+      settings: redactSettings(runtimeSettings)
     });
   } catch (error) {
     console.error('[runtime-settings] Error:', error);
@@ -1078,7 +1153,7 @@ app.post('/api/runtime-settings', async (req, res) => {
 
     res.json({
       success: true,
-      settings: runtimeSettings
+      settings: redactSettings(runtimeSettings)
     });
   } catch (error) {
     console.error('[runtime-settings] Error:', error);
@@ -1442,6 +1517,9 @@ app.get('/api/git/history', async (req, res) => {
 app.get('/api/git/commit-details', async (req, res) => {
   try {
     const { commitHash } = req.query;
+    if (!isValidCommitHash(commitHash)) {
+      return res.status(400).json({ success: false, error: 'Invalid commit hash' });
+    }
     const status = await gitCommitDetails(commitHash);
     res.json({ success: true, status });
   } catch (error) {
@@ -1476,9 +1554,16 @@ app.post('/api/git/add-all-and-commit', async (req, res) => {
 app.get('/api/git/file-at-commit', async (req, res) => {
   try {
     const { commitHash, filePath } = req.query;
+    if (!isValidCommitHash(commitHash)) {
+      return res.status(400).json({ success: false, error: 'Invalid commit hash' });
+    }
+    safePath(CONFIG_PATH, filePath);
     const content = await gitShowFileAtCommit(commitHash, filePath);
     res.json({ success: true, content });
   } catch (error) {
+    if (error.message.includes('traversal') || error.message.includes('Invalid path')) {
+      return res.status(400).json({ success: false, error: error.message });
+    }
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1487,10 +1572,13 @@ app.get('/api/git/file-at-commit', async (req, res) => {
 app.get('/api/file-content', async (req, res) => {
   try {
     const { filePath } = req.query;
-    const fullPath = path.join(CONFIG_PATH, filePath);
+    const fullPath = safePath(CONFIG_PATH, filePath);
     const content = await fsPromises.readFile(fullPath, 'utf-8');
     res.json({ success: true, content });
   } catch (error) {
+    if (error.message.includes('traversal') || error.message.includes('Invalid path')) {
+      return res.status(400).json({ success: false, error: error.message });
+    }
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1499,6 +1587,7 @@ app.get('/api/file-content', async (req, res) => {
 app.get('/api/git/file-history', async (req, res) => {
   try {
     const { filePath } = req.query;
+    safePath(CONFIG_PATH, filePath);
     const maxCount = 50; // Increased from 20 to show more history
     const log = await gitLog({ file: filePath, maxCount });
 
@@ -1538,6 +1627,10 @@ app.get('/api/git/file-history', async (req, res) => {
 app.get('/api/git/file-diff', async (req, res) => {
   try {
     const { filePath, commitHash } = req.query;
+    if (!isValidCommitHash(commitHash)) {
+      return res.status(400).json({ success: false, error: 'Invalid commit hash' });
+    }
+    safePath(CONFIG_PATH, filePath);
     const diff = await gitDiff([`${commitHash}^`, commitHash, '--', filePath]);
     res.json({ success: true, diff });
   } catch (error) {
@@ -1549,8 +1642,8 @@ app.get('/api/git/file-diff', async (req, res) => {
 app.get('/api/git/commit-diff', async (req, res) => {
   try {
     const { commitHash } = req.query;
-    if (!commitHash) {
-      return res.status(400).json({ success: false, error: 'commitHash is required' });
+    if (!isValidCommitHash(commitHash)) {
+      return res.status(400).json({ success: false, error: 'Invalid commit hash' });
     }
     const diff = await gitDiff([`${commitHash}^`, commitHash]);
     res.json({ success: true, diff });
@@ -1563,6 +1656,10 @@ app.get('/api/git/commit-diff', async (req, res) => {
 app.post('/api/restore-file', async (req, res) => {
   try {
     const { commitHash, filePath } = req.body;
+    if (!isValidCommitHash(commitHash)) {
+      return res.status(400).json({ success: false, error: 'Invalid commit hash' });
+    }
+    safePath(CONFIG_PATH, filePath);
     console.log(`[restore] Restoring file ${filePath} to commit ${commitHash.substring(0, 8)}`);
 
     // Get the date from the commit for the commit message
@@ -1614,6 +1711,9 @@ app.post('/api/restore-commit', async (req, res) => {
 
     if (!source || !target) {
       return res.status(400).json({ success: false, error: 'sourceHash and targetHash (or commitHash) required' });
+    }
+    if (!isValidCommitHash(source) || !isValidCommitHash(target)) {
+      return res.status(400).json({ success: false, error: 'Invalid commit hash' });
     }
 
     console.log(`[restore] Finding files from commit ${source.substring(0, 8)}`);
@@ -1720,8 +1820,8 @@ app.post('/api/git/hard-reset', async (req, res) => {
   try {
     const { commitHash, createBackup } = req.body;
 
-    if (!commitHash) {
-      return res.status(400).json({ success: false, error: 'commitHash is required' });
+    if (!isValidCommitHash(commitHash)) {
+      return res.status(400).json({ success: false, error: 'Invalid commit hash' });
     }
 
     console.log(`[hard-reset] Resetting ALL files to commit ${commitHash.substring(0, 8)}`);
@@ -1860,8 +1960,8 @@ app.post('/api/git/soft-reset', async (req, res) => {
   try {
     const { commitHash } = req.body;
 
-    if (!commitHash) {
-      return res.status(400).json({ success: false, error: 'commitHash is required' });
+    if (!isValidCommitHash(commitHash)) {
+      return res.status(400).json({ success: false, error: 'Invalid commit hash' });
     }
 
     console.log(`[soft-reset] Soft resetting to commit ${commitHash.substring(0, 8)}`);
@@ -1972,9 +2072,8 @@ app.get('/api/git/status', async (req, res) => {
 // List YAML files (legacy)
 app.post('/api/list-yaml-files', async (req, res) => {
   try {
-    const { liveConfigPath, directory = '' } = req.body;
-    const searchPath = liveConfigPath || CONFIG_PATH;
-    const dirPath = directory ? `${searchPath}/${directory}` : searchPath;
+    const { directory = '' } = req.body;
+    const dirPath = directory ? safePath(CONFIG_PATH, directory) : CONFIG_PATH;
 
     const allowedExtensions = getConfiguredExtensions();
     const files = fs.readdirSync(dirPath)
@@ -2128,6 +2227,18 @@ function initializeWatcher() {
         console.log(`[watcher] Committing: ${commitMessage} (${stagedFiles.length} file(s))`);
         await gitCommit(commitMessage);
         console.log(`Committed: ${commitMessage}`);
+        autoCommitsTotal.inc();
+
+        // Collect diff stats for metrics
+        try {
+          const diffStat = await gitRaw(['diff', '--shortstat', 'HEAD~1', 'HEAD']);
+          const addMatch = diffStat.match(/(\d+) insertion/);
+          const delMatch = diffStat.match(/(\d+) deletion/);
+          if (addMatch) commitLinesAdded.inc(parseInt(addMatch[1]));
+          if (delMatch) commitLinesRemoved.inc(parseInt(delMatch[1]));
+        } catch {
+          // First commit or other edge case
+        }
 
         // Run retention cleanup if enabled
         if (runtimeSettings.historyRetention) {
@@ -2170,20 +2281,24 @@ function initializeWatcher() {
 
   // Watch for file changes
   watcher.on('change', async (filePath) => {
+    fileChangeEvents.inc({ type: 'change' });
     await handleFileEvent(filePath, 'changed');
   });
 
   // Watch for new files being added
   watcher.on('add', async (filePath) => {
+    fileChangeEvents.inc({ type: 'add' });
     await handleFileEvent(filePath, 'added');
   });
 
   // Watch for files being deleted
   watcher.on('unlink', async (filePath) => {
+    fileChangeEvents.inc({ type: 'unlink' });
     await handleFileEvent(filePath, 'deleted');
   });
 
   watcher.on('ready', () => {
+    fileWatcherActive.set(1);
     console.log('[init] File watcher ready and watching for changes');
   });
 
@@ -2202,8 +2317,6 @@ app.get('/api/health', (req, res) => {
     fileWatcherActive: watcher !== null,
     watching: CONFIG_PATH || '/config',
     time: new Date().toISOString(),
-    headers: req.headers,
-    url: req.originalUrl,
     url: req.originalUrl
   });
 });
@@ -2317,15 +2430,22 @@ async function runRetentionCleanup(force = false) {
     }
 
     // Call the fixed cleanup method
+    const cleanupStart = Date.now();
     const result = await cleanupHistoryOrphanMethod(options);
+    const cleanupDuration = (Date.now() - cleanupStart) / 1000;
 
     if (result.success) {
       console.log(`[retention-${cleanupId}] Cleanup successful: ${result.message}`);
       console.log(`[retention-${cleanupId}] Merged: ${result.commitsMerged}, Kept: ${result.commitsKept}, Total: ${result.totalCommits}`);
+      retentionCleanupTotal.inc({ status: 'success' });
+    } else {
+      retentionCleanupTotal.inc({ status: 'failure' });
     }
+    retentionCleanupDuration.observe(cleanupDuration);
 
   } catch (error) {
     console.error(`[retention-${cleanupId}] Cleanup failed:`, error.message);
+    retentionCleanupTotal.inc({ status: 'failure' });
   }
 }
 
@@ -2912,11 +3032,7 @@ app.get('/api/debug', (req, res) => {
   res.json({
     originalUrl: req.originalUrl,
     url: req.url,
-    headers: req.headers,
-    ingressPath: req.headers['x-ingress-path'] ||
-      req.headers['x-forwarded-prefix'] ||
-      req.headers['x-external-url'] ||
-      '(not set)'
+    ingressPath: res.locals.ingressPath || '(not set)'
   });
 });
 
@@ -3050,8 +3166,8 @@ app.get('/api/automation/:id/at-commit', async (req, res) => {
   try {
     const { id } = req.params;
     const { commitHash } = req.query;
-    if (!commitHash) {
-      return res.status(400).json({ success: false, error: 'commitHash is required' });
+    if (!isValidCommitHash(commitHash)) {
+      return res.status(400).json({ success: false, error: 'Invalid commit hash' });
     }
     const result = await getAutomationAtCommit(id, commitHash, CONFIG_PATH);
     res.json(result);
@@ -3078,8 +3194,8 @@ app.get('/api/script/:id/at-commit', async (req, res) => {
   try {
     const { id } = req.params;
     const { commitHash } = req.query;
-    if (!commitHash) {
-      return res.status(400).json({ success: false, error: 'commitHash is required' });
+    if (!isValidCommitHash(commitHash)) {
+      return res.status(400).json({ success: false, error: 'Invalid commit hash' });
     }
     const result = await getScriptAtCommit(id, commitHash, CONFIG_PATH);
     res.json(result);
@@ -3318,6 +3434,7 @@ async function configureSecretsTracking(include) {
  * @returns {Object} Result with success status
  */
 async function pushToRemote(includeSecrets = false) {
+  const startTime = Date.now();
   try {
     // Configure secrets tracking before pushing
     await configureSecretsTracking(includeSecrets);
@@ -3333,9 +3450,16 @@ async function pushToRemote(includeSecrets = false) {
 
     // Always push to 'develop' on remote (new default branch)
     const remoteBranch = 'develop';
-    console.log(`[cloud-sync] Pushing ${localBranch} to origin/${remoteBranch}...`);
-    await gitExec(['push', '-f', '-u', 'origin', `${localBranch}:${remoteBranch}`]);
-    console.log(`[cloud-sync] Successfully pushed to origin/${remoteBranch}`);
+    console.log(`[cloud-sync] Push started (branch: ${localBranch} -> origin/${remoteBranch})`);
+    await gitExec(['push', '-u', 'origin', `${localBranch}:${remoteBranch}`]);
+
+    const durationSec = (Date.now() - startTime) / 1000;
+    console.log(`[cloud-sync] Push succeeded in ${durationSec.toFixed(1)}s`);
+
+    // Metrics
+    pushTotal.inc({ status: 'success', reason: 'ok' });
+    pushDuration.observe(durationSec);
+    lastPushTimestamp.set(Math.floor(Date.now() / 1000));
 
     // Update status
     const timestamp = new Date().toISOString();
@@ -3347,7 +3471,16 @@ async function pushToRemote(includeSecrets = false) {
     return { success: true, branch: remoteBranch };
 
   } catch (error) {
-    console.error('[cloud-sync] Push failed:', error);
+    const durationSec = (Date.now() - startTime) / 1000;
+    const reason = classifyPushError(error.message);
+    console.error(`[cloud-sync] Push failed: ${reason} - ${error.message}`);
+    if (reason === 'non_fast_forward') {
+      console.log('[cloud-sync] Non-fast-forward rejection detected');
+    }
+
+    // Metrics
+    pushTotal.inc({ status: 'failure', reason });
+    pushDuration.observe(durationSec);
 
     // Update status
     runtimeSettings.cloudSync.lastPushTime = new Date().toISOString();
@@ -3846,7 +3979,11 @@ app.post('/api/cloud-sync/settings', async (req, res) => {
     console.log('[cloud-sync settings] Saving runtime settings...');
     await saveRuntimeSettings();
     console.log('[cloud-sync settings] Success!');
-    res.json({ success: true, settings: runtimeSettings.cloudSync });
+    const redactedCloudSync = { ...runtimeSettings.cloudSync };
+    const hasToken = !!redactedCloudSync.authToken;
+    delete redactedCloudSync.authToken;
+    redactedCloudSync.hasAuthToken = hasToken;
+    res.json({ success: true, settings: redactedCloudSync });
   } catch (error) {
     console.error('[cloud-sync settings] Error:', error);
     console.error('[cloud-sync settings] Stack:', error.stack);
