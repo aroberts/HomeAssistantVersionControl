@@ -1,5 +1,12 @@
 // API endpoint is relative to the current page
 const API = 'api';
+
+// Helper to strip auth tokens from URLs for safe display
+// Converts http://TOKEN@host:port/path to http://host:port/path
+function stripTokenFromUrl(url) {
+  if (!url) return url;
+  return url.replace(/:\/\/[^@]+@/, '://');
+}
 let currentMode = 'timeline';
 let currentSelection = null;
 let modalData = null;
@@ -42,8 +49,14 @@ const fontSizeOptions = [
   { name: 'XL', size: '16px' }
 ];
 
+const REPO_NAME_KEY = 'cloudRepoName';
+const DEBOUNCE_TIME_KEY = 'debounceTime';
+const DEBOUNCE_UNIT_KEY = 'debounceTimeUnit';
+
 // Diff style management
+
 let currentDiffStyle = localStorage.getItem('diffStyle') || 'style-2';
+// Date format is now auto-detected via browser locale with dateStyle/timeStyle
 const diffStyleOptions = [
   { id: 'style-2', name: 'High Contrast', description: 'Bold and bright' },
   { id: 'style-1', name: 'GitHub Classic', description: 'Subtle, clean look' },
@@ -54,6 +67,69 @@ const diffStyleOptions = [
   { id: 'style-7', name: 'Minimal Border', description: 'Ultra-clean borders' },
   { id: 'style-8', name: 'Split Highlight', description: 'Word-level emphasis' }
 ];
+
+// Cycle through diff styles
+function cycleDiffStyle() {
+  const currentIndex = diffStyleOptions.findIndex(s => s.id === currentDiffStyle);
+  const nextIndex = (currentIndex + 1) % diffStyleOptions.length;
+  const nextStyle = diffStyleOptions[nextIndex];
+
+  currentDiffStyle = nextStyle.id;
+  localStorage.setItem('diffStyle', currentDiffStyle);
+
+  // Apply immediately if possible, or refresh view
+  const diffShell = document.querySelector('.diff-viewer-shell');
+  if (diffShell) {
+    // Remove old style class
+    diffStyleOptions.forEach(s => diffShell.classList.remove(s.id));
+    // Add new style class
+    diffShell.classList.add(currentDiffStyle);
+  }
+
+  // Update settings UI if open
+  const styleSelect = document.getElementById('diffStyle');
+  if (styleSelect) {
+    styleSelect.value = currentDiffStyle;
+  }
+
+  // Show ephemeral notification
+  showNotification(`Diff Style: ${nextStyle.name}`, 'info', 1500);
+}
+
+// Cross-browser clipboard helper (Safari doesn't support navigator.clipboard after async operations)
+async function copyToClipboard(text) {
+  // Try modern clipboard API first
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (err) {
+      // Fall through to fallback
+    }
+  }
+
+  // Fallback for Safari and older browsers
+  const textArea = document.createElement('textarea');
+  textArea.value = text;
+  textArea.style.position = 'fixed';
+  textArea.style.left = '-9999px';
+  textArea.style.top = '-9999px';
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+
+  try {
+    const successful = document.execCommand('copy');
+    document.body.removeChild(textArea);
+    if (successful) {
+      return true;
+    }
+    throw new Error('execCommand copy failed');
+  } catch (err) {
+    document.body.removeChild(textArea);
+    throw err;
+  }
+}
 
 // Diff view format management
 let diffViewFormat = localStorage.getItem('diffViewFormat') || 'split';
@@ -298,8 +374,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   injectSelectedColorStyle();
   injectHoverStyles();
 
-  // Initialize Holiday Mode from localStorage
-  initHolidayMode();
+  // Initialize Winter Mode from localStorage
+  initWinterMode();
 
   // Initialize the view
   switchMode(currentMode);
@@ -982,11 +1058,150 @@ function refreshCurrentView() {
 }
 
 
+// =====================================
+// File Extensions Tag Input Functions
+// =====================================
+
+// Current extensions state (loaded from server)
+let currentExtensions = { include: ['yaml', 'yml'], exclude: ['secrets.yaml'] };
+
+function handleExtensionInput(event, type) {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    const input = event.target;
+    const value = input.value.trim().replace(/^\./, ''); // Remove leading dot
+
+    if (value) {
+      addExtensionTag(type, value);
+      input.value = '';
+    }
+  }
+}
+
+function addExtensionTag(type, value) {
+  // Don't add duplicates
+  if (type === 'include' && currentExtensions.include.includes(value)) return;
+  if (type === 'exclude' && currentExtensions.exclude.includes(value)) return;
+
+  // Update state
+  if (type === 'include') {
+    currentExtensions.include.push(value);
+  } else {
+    currentExtensions.exclude.push(value);
+  }
+
+  // Re-render tags
+  renderExtensionTags();
+}
+
+function removeExtensionTag(type, value) {
+  if (type === 'include') {
+    currentExtensions.include = currentExtensions.include.filter(v => v !== value);
+  } else {
+    currentExtensions.exclude = currentExtensions.exclude.filter(v => v !== value);
+  }
+  renderExtensionTags();
+}
+
+function renderExtensionTags() {
+  // Render include tags
+  const includeContainer = document.getElementById('includeExtensions');
+  if (includeContainer) {
+    const input = includeContainer.querySelector('input');
+    includeContainer.innerHTML = '';
+    currentExtensions.include.forEach(ext => {
+      const tag = createTagElement('include', ext);
+      includeContainer.appendChild(tag);
+    });
+    includeContainer.appendChild(input || createTagInput('include'));
+  }
+
+  // Render exclude tags
+  const excludeContainer = document.getElementById('excludeExtensions');
+  if (excludeContainer) {
+    const input = excludeContainer.querySelector('input');
+    excludeContainer.innerHTML = '';
+    currentExtensions.exclude.forEach(file => {
+      const tag = createTagElement('exclude', file);
+      excludeContainer.appendChild(tag);
+    });
+    excludeContainer.appendChild(input || createTagInput('exclude'));
+  }
+}
+
+function createTagElement(type, value) {
+  const tag = document.createElement('span');
+  tag.className = 'extension-tag';
+  tag.style.cssText = `
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    background: var(--primary);
+    color: white;
+    border-radius: 12px;
+    font-size: 13px;
+  `;
+  tag.innerHTML = `
+    ${value}
+    <span onclick="removeExtensionTag('${type}', '${value}')" style="cursor: pointer; opacity: 0.7; font-size: 14px;">&times;</span>
+  `;
+  return tag;
+}
+
+function createTagInput(type) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = type === 'include' ? 'includeExtensionInput' : 'excludeExtensionInput';
+  input.placeholder = type === 'include' ? 'Add extension...' : 'Add file...';
+  input.style.cssText = `
+    flex: 1;
+    min-width: 100px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 14px;
+    outline: none;
+  `;
+  input.onkeydown = (e) => handleExtensionInput(e, type);
+  return input;
+}
+
+function loadExtensionsFromSettings(settings) {
+  if (settings.extensions) {
+    currentExtensions = {
+      include: settings.extensions.include || ['yaml', 'yml'],
+      exclude: settings.extensions.exclude || ['secrets.yaml']
+    };
+  }
+  renderExtensionTags();
+}
+
+async function loadExtensionsSettings() {
+  try {
+    const response = await fetch(`${API}/runtime-settings`);
+    const data = await response.json();
+    if (data.success && data.settings) {
+      loadExtensionsFromSettings(data.settings);
+    }
+  } catch (error) {
+    console.error('Failed to load extensions settings:', error);
+    // Use defaults
+    renderExtensionTags();
+  }
+}
+
 // Settings modal functions
 function openSettings() {
   const settingsModal = document.getElementById('settingsModal');
 
   document.getElementById('settingsModal').classList.add('active');
+
+  // Load cloud sync settings when modal opens
+  loadCloudSyncSettings();
+
+  // Load extensions settings
+  loadExtensionsSettings();
 }
 
 function closeSettings() {
@@ -1036,7 +1251,8 @@ async function saveSettings() {
         historyRetention,
         retentionType,
         retentionValue,
-        retentionUnit
+        retentionUnit,
+        extensions: currentExtensions
       })
     });
 
@@ -1052,14 +1268,34 @@ async function saveSettings() {
     showNotification(t('app.settings_save_error_generic'), 'error', 3000);
   }
 
+  // Save cloud sync settings
+  const cloudSaveSuccess = await saveCloudSyncSettings();
+
+  // If cloud settings failed (e.g. validation error), don't close modal
+  if (cloudSaveSuccess === false) {
+    return;
+  }
+
   // Re-render current view to apply changes immediately
-  refreshCurrentView();
+  try {
+    refreshCurrentView();
+  } catch (e) {
+    console.error('Error refreshing view:', e);
+  }
 
   // Settings saved - close modal
-  closeSettings();
+  try {
+    closeSettings();
+  } catch (e) {
+    console.error('Error closing settings modal:', e);
+  }
 
   // Update UI state based on new settings
-  handleRetentionToggle();
+  try {
+    handleRetentionToggle();
+  } catch (e) {
+    console.error('Error updating UI state:', e);
+  }
 }
 
 function handleRetentionToggle() {
@@ -1068,6 +1304,688 @@ function handleRetentionToggle() {
 
   if (historyRetention && retentionOptions) {
     retentionOptions.style.display = historyRetention.checked ? 'block' : 'none';
+  }
+}
+
+// =====================================
+// Cloud Sync Functions
+// =====================================
+
+function handleCloudSyncToggle() {
+  const cloudSyncEnabled = document.getElementById('cloudSyncEnabled');
+  const cloudSyncOptions = document.getElementById('cloudSyncOptions');
+
+  if (cloudSyncEnabled && cloudSyncOptions) {
+    cloudSyncOptions.style.display = cloudSyncEnabled.checked ? 'block' : 'none';
+  }
+}
+
+async function loadCloudSyncSettings() {
+  try {
+    const response = await fetch(`${API}/cloud-sync/settings`);
+    const data = await response.json();
+
+    if (data.success) {
+      const settings = data.settings;
+
+      // Update UI elements
+      const enabledCheckbox = document.getElementById('cloudSyncEnabled');
+      if (enabledCheckbox) {
+        enabledCheckbox.checked = settings.enabled;
+        handleCloudSyncToggle();
+      }
+
+      // Determine provider from settings
+      // If authProvider is github, or if remoteUrl is empty, default to github
+      // If authProvider is generic, or if we have a remoteUrl and authProvider is strictly NOT github, default to custom
+      const isGithub = settings.authProvider === 'github' || (!settings.authProvider && !settings.remoteUrl);
+
+      const providerGithub = document.getElementById('cloudProviderGithub');
+      const providerCustom = document.getElementById('cloudProviderCustom');
+
+      if (providerGithub && providerCustom) {
+        providerGithub.checked = isGithub;
+        providerCustom.checked = !isGithub;
+        // Trigger UI update
+        if (typeof handleCloudProviderChange === 'function') {
+          handleCloudProviderChange();
+        }
+      }
+
+      const remoteUrlInput = document.getElementById('cloudRemoteUrl');
+      if (remoteUrlInput) {
+        remoteUrlInput.value = settings.remoteUrl || '';
+      }
+
+      const pushFrequencySelect = document.getElementById('cloudPushFrequency');
+      if (pushFrequencySelect) {
+        pushFrequencySelect.value = settings.pushFrequency || 'manual';
+      }
+
+      const includeSecretsCheckbox = document.getElementById('cloudIncludeSecrets');
+      if (includeSecretsCheckbox) {
+        includeSecretsCheckbox.checked = settings.includeSecrets === true;
+      }
+
+      // Hide secrets toggle if secrets.yaml is already in exclude_files (making toggle irrelevant)
+      const secretsToggleContainer = document.getElementById('secretsToggleContainer');
+      if (secretsToggleContainer) {
+        // Check if secrets.yaml is excluded via extensions config
+        try {
+          const extResponse = await fetch(`${API}/runtime-settings`);
+          const extData = await extResponse.json();
+          const excludeFiles = extData?.settings?.extensions?.exclude || [];
+          const secretsExcluded = excludeFiles.includes('secrets.yaml');
+          secretsToggleContainer.style.display = secretsExcluded ? 'none' : 'block';
+        } catch (e) {
+          // Default to showing toggle on error
+          secretsToggleContainer.style.display = 'block';
+        }
+      }
+
+      // Update status
+      updateCloudSyncStatus(settings);
+
+      // Load GitHub user info if connected/relevant
+      if (isGithub) {
+        loadGitHubUser();
+      } else {
+        // For custom provider, show connected state if we have a custom URL
+        if (settings.customRemoteUrl) {
+          const customNotConnected = document.getElementById('customNotConnected');
+          const customConnected = document.getElementById('customConnected');
+          const repoLink = document.getElementById('customRepoLink');
+
+          if (customNotConnected && customConnected) {
+            customNotConnected.style.display = 'none';
+            customConnected.style.display = 'block';
+            const customAccountLabel = document.getElementById('customAccountLabel');
+            if (customAccountLabel) customAccountLabel.style.display = 'block';
+
+            if (repoLink) {
+              const cleanUrl = stripTokenFromUrl(settings.customRemoteUrl);
+              const parts = cleanUrl.replace(/\.git$/, '').split('/').filter(p => p);
+              // Show User/Owner (2nd to last part) or fallback to Repo Name (last part)
+              const repoName = parts.length >= 2 ? parts[parts.length - 2] : (parts.pop() || 'Repository');
+              repoLink.textContent = repoName;
+              repoLink.href = cleanUrl.replace(/\.git$/, '');
+
+              // Try to load avatar
+              updateCustomRepoAvatar(settings.customRemoteUrl);
+            }
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load cloud sync settings:', error);
+  }
+}
+
+async function updateCustomRepoAvatar(remoteUrl) {
+  const avatarImg = document.getElementById('customRepoAvatar');
+  const iconSvg = document.getElementById('customRepoIcon');
+  const repoLink = document.getElementById('customRepoLink');
+  if (!avatarImg || !iconSvg || !remoteUrl) return;
+
+  // Reset to icon initially (or keep current if reloading)
+  // avatarImg.style.display = 'none';
+  // iconSvg.style.display = 'block';
+
+  try {
+    // Call backend API to get avatar URL and user info (handles Gitea API auth)
+    const response = await fetch(`/api/cloud-sync/avatar?remoteUrl=${encodeURIComponent(remoteUrl)}`);
+    const data = await response.json();
+
+    if (data.success) {
+      console.log('[Custom] Got user info:', data);
+
+      // Update account label based on detected provider
+      const customAccountLabel = document.getElementById('customAccountLabel');
+      if (customAccountLabel) {
+        const labelSpan = customAccountLabel.querySelector('span');
+        if (labelSpan && data.provider) {
+          const providerNames = {
+            'gitea': 'Gitea Account',
+            'gitlab': 'GitLab Account',
+            'custom': 'Custom Account'
+          };
+          labelSpan.textContent = providerNames[data.provider] || 'Custom Account';
+        }
+      }
+
+      // Update display name if available
+      if (repoLink && data.fullName) {
+        repoLink.textContent = data.fullName;
+      }
+
+      // Update avatar if available
+      if (data.avatarUrl) {
+        avatarImg.onload = () => {
+          avatarImg.style.display = 'block';
+          iconSvg.style.display = 'none';
+        };
+
+        avatarImg.onerror = () => {
+          console.warn('Avatar image failed to load');
+          avatarImg.style.display = 'none';
+          iconSvg.style.display = 'block';
+        };
+
+        avatarImg.src = data.avatarUrl;
+      } else {
+        avatarImg.style.display = 'none';
+        iconSvg.style.display = 'block';
+      }
+    } else {
+      console.log('[Custom] No user info found via API, falling back to defaults');
+      avatarImg.style.display = 'none';
+      iconSvg.style.display = 'block';
+    }
+  } catch (e) {
+    console.warn('[Custom] Error fetching user info:', e);
+    avatarImg.style.display = 'none';
+    iconSvg.style.display = 'block';
+  }
+}
+
+async function saveCloudSyncSettings(silent = false) {
+  const enabled = document.getElementById('cloudSyncEnabled').checked;
+  const isGithub = document.getElementById('cloudProviderGithub').checked;
+  let remoteUrl = '';
+  let authProvider = '';
+
+  if (isGithub) {
+    // For GitHub mode, DON'T send the hidden input URL - it might be a Custom URL
+    // Let the backend use the stored GitHub URL instead
+    // Only exception: if the hidden input has a github.com URL, we can send it
+    const inputUrl = document.getElementById('cloudRemoteUrl').value || '';
+    if (inputUrl.includes('github.com')) {
+      remoteUrl = inputUrl;
+    }
+    // Otherwise leave remoteUrl empty - backend will use stored githubRemoteUrl
+    authProvider = 'github';
+  } else {
+    // Custom mode - use the URL from the input
+    remoteUrl = document.getElementById('cloudRemoteUrl').value;
+    authProvider = 'generic';
+    if (!remoteUrl) {
+      if (!silent) {
+        // showNotification('Please enter a remote URL', 'error');
+      }
+      return false;
+    }
+  }
+
+  const pushFrequency = document.getElementById('cloudPushFrequency').value;
+  const includeSecrets = document.getElementById('cloudIncludeSecrets').checked;
+
+  try {
+    const payload = {
+      enabled,
+      remoteUrl,
+      pushFrequency,
+      includeSecrets,
+      authProvider
+    };
+    console.log('[saveCloudSyncSettings] Sending payload:', payload);
+
+    const response = await fetch(`${API}/cloud-sync/settings`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await response.json();
+    console.log('[saveCloudSyncSettings] Response:', data);
+
+    if (data.success) {
+      if (!silent && false) showNotification('Settings saved', 'success');
+      // Don't reload settings here - let the caller handle any needed refreshes
+      return true;
+    } else {
+      console.error('[saveCloudSyncSettings] Error from server:', data.error);
+      if (!silent) {
+        // showNotification('Error saving settings: ' + data.error, 'error');
+      }
+      return false;
+    }
+  } catch (error) {
+    console.error('[saveCloudSyncSettings] Exception:', error);
+    // showNotification('Error saving settings', 'error');
+    return false;
+  }
+}
+
+async function testCloudConnection() {
+  const remoteUrlInput = document.getElementById('cloudRemoteUrl');
+  const remoteUrl = remoteUrlInput ? remoteUrlInput.value.trim() : '';
+
+  // Backend now handles fallback to stored URL, so we can proceed even if empty here.
+  // Only show error if we confirm backend has no URL via API response.
+
+  showNotification('Testing connection...', 'info', 2000);
+
+  try {
+    // Pass empty authToken if hidden input doesn't exist (it doesn't anymore)
+    // Backend will use stored token.
+    const response = await fetch(`${API}/cloud-sync/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remoteUrl })
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      showNotification('Connection successful!', 'success', 3000);
+    } else {
+      showNotification(`Connection failed: ${data.error}`, 'error', 5000);
+    }
+  } catch (error) {
+    console.error('Test connection error:', error);
+    showNotification(`Error: ${error.message}`, 'error', 5000);
+  }
+}
+
+// Test custom repo connection and show connected state
+async function testCustomConnection() {
+  const remoteUrlInput = document.getElementById('cloudRemoteUrl');
+  const remoteUrl = remoteUrlInput ? remoteUrlInput.value.trim() : '';
+
+  if (!remoteUrl) {
+    showNotification('Please enter a remote URL', 'error', 3000);
+    return;
+  }
+
+  showNotification('Testing connection...', 'info', 2000);
+
+  try {
+    // First save the URL
+    await saveCloudSyncSettings(true);
+
+    // Then test the connection
+    const response = await fetch(`${API}/cloud-sync/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remoteUrl })
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      showNotification('Connection successful!', 'success', 3000);
+
+      // Show connected state
+      document.getElementById('customNotConnected').style.display = 'none';
+      document.getElementById('customConnected').style.display = 'block';
+      const customAccountLabel = document.getElementById('customAccountLabel');
+      if (customAccountLabel) customAccountLabel.style.display = 'block';
+
+      // Update the repo link
+      const repoLink = document.getElementById('customRepoLink');
+      if (repoLink) {
+        // Strip token and extract repo name from URL
+        const cleanUrl = stripTokenFromUrl(remoteUrl);
+        const parts = cleanUrl.replace(/\.git$/, '').split('/').filter(p => p);
+        // Show User/Owner (2nd to last part) or fallback to Repo Name (last part)
+        const repoName = parts.length >= 2 ? parts[parts.length - 2] : (parts.pop() || 'Repository');
+        repoLink.textContent = repoName;
+        repoLink.href = cleanUrl.replace(/\.git$/, '');
+
+        // Try to load avatar
+        updateCustomRepoAvatar(remoteUrl);
+      }
+    } else {
+      showNotification(`Connection failed: ${data.error}`, 'error', 5000);
+    }
+  } catch (error) {
+    console.error('Test custom connection error:', error);
+    showNotification(`Error: ${error.message}`, 'error', 5000);
+  }
+}
+
+// Disconnect custom repo (show URL input again)
+function disconnectCustom() {
+  document.getElementById('customNotConnected').style.display = 'block';
+  document.getElementById('customConnected').style.display = 'none';
+  const customAccountLabel = document.getElementById('customAccountLabel');
+  if (customAccountLabel) customAccountLabel.style.display = 'none';
+  showNotification('Custom repo disconnected', 'info', 3000);
+}
+
+async function pushToCloudNow() {
+  showNotification('Pushing to cloud...', 'info', 2000);
+
+  // Save current settings first
+  const saveSuccess = await saveCloudSyncSettings(true); // silent - don't show "Settings saved"
+
+  if (saveSuccess === false) {
+    return;
+  }
+
+  try {
+    const response = await fetch(`${API}/cloud-sync/push`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: true })
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      showNotification('Push successful!', 'success', 3000);
+      loadCloudSyncSettings();
+    } else {
+      showNotification(`Push failed: ${data.error}`, 'error', 5000);
+    }
+  } catch (error) {
+    console.error('Push error:', error);
+    showNotification(`Push error: ${error.message}`, 'error', 5000);
+  }
+}
+
+function updateCloudSyncStatus(settings) {
+  const lastPushTime = document.getElementById('cloudLastPushTime');
+  const lastPushStatus = document.getElementById('cloudLastPushStatus');
+
+  if (!lastPushTime || !lastPushStatus) return;
+
+  if (settings.lastPushTime) {
+    const formatted = getFormattedDate(settings.lastPushTime);
+    lastPushTime.textContent = formatted;
+
+    if (settings.lastPushStatus === 'success') {
+      lastPushStatus.textContent = '';
+    } else if (settings.lastPushStatus === 'error') {
+      lastPushStatus.textContent = ' ✗ ' + (settings.lastPushError || 'Error');
+      lastPushStatus.style.color = 'var(--danger)';
+    } else {
+      lastPushStatus.textContent = '';
+    }
+  } else {
+    lastPushTime.textContent = 'Never';
+    lastPushStatus.textContent = '';
+  }
+}
+
+// =====================================
+// GitHub OAuth Device Flow
+// =====================================
+
+
+let isGitHubPolling = false;
+
+async function connectGitHub() {
+  // Stop any existing polling immediately
+  if (isGitHubPolling) {
+    isGitHubPolling = false;
+    await new Promise(r => setTimeout(r, 500)); // Give it a moment to stop
+  }
+
+  const btn = document.getElementById('connectGithubBtn');
+  if (btn) btn.disabled = true;
+
+  try {
+    // Show connecting state
+    document.getElementById('githubNotConnected').style.display = 'none';
+    document.getElementById('githubConnecting').style.display = 'block';
+    document.getElementById('githubConnected').style.display = 'none';
+
+    console.log('[Frontend] Initiating GitHub Device Flow...');
+
+    // Initiate device flow
+    const response = await fetch(`${API}/github/device-flow/initiate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    const data = await response.json();
+
+    if (!data.success) {
+      showNotification(`GitHub auth failed: ${data.error}`, 'error', 5000);
+      cancelGitHubConnect();
+      return;
+    }
+
+    console.log('[Frontend] Device flow initiated. User code:', data.user_code);
+
+    // Show the user code
+    document.getElementById('githubUserCode').textContent = data.user_code;
+
+    // Auto-copy to clipboard (with Safari fallback)
+    // Don't auto-copy - user will tap the code to copy (works in Safari Web Apps)
+
+    // Start polling for token
+    isGitHubPolling = true;
+    const pollIntervalMs = (data.interval || 5) * 1000;
+    const maxAttempts = Math.ceil(data.expires_in / (data.interval || 5));
+    let attempts = 0;
+
+    console.log(`[Frontend] Starting poll loop. Interval: ${pollIntervalMs}ms`);
+
+    const pollForToken = async () => {
+      if (!isGitHubPolling) {
+        console.log('[Frontend] Polling stopped by user or timeout.');
+        return;
+      }
+
+      attempts++;
+      if (attempts > maxAttempts) {
+        console.log('[Frontend] Polling timed out.');
+        showNotification('Authorization timed out', 'error', 5000);
+        cancelGitHubConnect();
+        return;
+      }
+
+      try {
+        // console.log(`[Frontend] Polling attempt ${attempts}...`);
+        const pollResponse = await fetch(`${API}/github/device-flow/poll`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_code: data.device_code })
+        });
+
+        const pollData = await pollResponse.json();
+
+        if (pollData.success) {
+          console.log('[Frontend] Token received!');
+          isGitHubPolling = false;
+          showNotification('GitHub connected! Creating repository...', 'success', 3000);
+
+          // Create the repository automatically
+          await createGitHubRepo();
+          await loadGitHubUser();
+          // Reload settings to ensure everything is in sync
+          await loadCloudSyncSettings();
+          return;
+        }
+
+        if (pollData.expired) {
+          console.log('[Frontend] Code expired.');
+          isGitHubPolling = false;
+          showNotification('Code expired. Please try again.', 'error', 5000);
+          cancelGitHubConnect();
+          return;
+        }
+
+        if (pollData.denied) {
+          console.log('[Frontend] Access denied.');
+          isGitHubPolling = false;
+          showNotification('Access denied', 'error', 5000);
+          cancelGitHubConnect();
+          return;
+        }
+
+        if (pollData.pending || pollData.slow_down) {
+          // Expected states, continue polling
+          const nextInterval = pollData.slow_down ? (pollIntervalMs + 5000) : pollIntervalMs;
+          setTimeout(pollForToken, nextInterval);
+        } else {
+          // Unknown error? retry anyway?
+          console.warn('[Frontend] Unknown poll state:', pollData);
+          setTimeout(pollForToken, pollIntervalMs);
+        }
+
+      } catch (error) {
+        console.error('[Frontend] Poll fetch error:', error);
+        // Retry on network error
+        setTimeout(pollForToken, pollIntervalMs);
+      }
+    };
+
+    // Start the loop
+    setTimeout(pollForToken, pollIntervalMs);
+
+    // Open GitHub in new tab LAST to avoid blocking
+    console.log('[Frontend] Opening GitHub URL...');
+    window.open(data.verification_uri, '_blank');
+
+  } catch (error) {
+    console.error('GitHub connect error:', error);
+    showNotification(`Error: ${error.message}`, 'error', 5000);
+    cancelGitHubConnect();
+  }
+}
+
+function cancelGitHubConnect() {
+  isGitHubPolling = false;
+  console.log('[Frontend] Cancelling GitHub connect.');
+
+  const btn = document.getElementById('connectGithubBtn');
+  if (btn) btn.disabled = false;
+
+  document.getElementById('githubNotConnected').style.display = 'block';
+  document.getElementById('githubConnecting').style.display = 'none';
+  document.getElementById('githubConnected').style.display = 'none';
+}
+
+// Copy GitHub code on tap - works in Safari Web Apps since it's a direct user gesture
+async function copyGitHubCode() {
+  const codeElement = document.getElementById('githubUserCode');
+  const code = codeElement?.textContent?.trim();
+
+  if (!code) {
+    showNotification('No code to copy', 'error', 2000);
+    return;
+  }
+
+  try {
+    await copyToClipboard(code);
+    showNotification('Code copied! Paste into GitHub', 'success', 3000);
+  } catch (err) {
+    console.error('Copy failed:', err);
+    showNotification('Copy failed - please select and copy manually', 'error', 4000);
+  }
+}
+
+async function loadGitHubUser() {
+  try {
+    const response = await fetch(`${API}/github/user`);
+    const data = await response.json();
+
+    if (data.success && data.user) {
+      document.getElementById('githubNotConnected').style.display = 'none';
+      document.getElementById('githubConnecting').style.display = 'none';
+      document.getElementById('githubConnected').style.display = 'block';
+
+      // Hide the entire repo name section since we're already connected
+      const repoNameSection = document.getElementById('repoNameSection');
+      if (repoNameSection) repoNameSection.style.display = 'none';
+
+      document.getElementById('githubAvatar').src = data.user.avatar_url;
+
+      // Populate the repo link - shows username but links to repo
+      const repoLink = document.getElementById('githubRepoLink');
+      const remoteUrl = document.getElementById('cloudRemoteUrl')?.value;
+      if (repoLink) {
+        // Show the user's name or login
+        repoLink.textContent = data.user.name || data.user.login;
+        // Link to the repo if available
+        if (remoteUrl) {
+          const browserUrl = remoteUrl.replace(/\.git$/, '');
+          repoLink.href = browserUrl;
+        }
+      }
+    } else {
+      // Not connected - show repo name section
+      document.getElementById('githubNotConnected').style.display = 'block';
+      document.getElementById('githubConnecting').style.display = 'none';
+      document.getElementById('githubConnected').style.display = 'none';
+      const repoNameSection = document.getElementById('repoNameSection');
+      if (repoNameSection) repoNameSection.style.display = 'block';
+    }
+  } catch (error) {
+    console.error('Failed to load GitHub user:', error);
+    document.getElementById('githubNotConnected').style.display = 'block';
+    document.getElementById('githubConnecting').style.display = 'none';
+    document.getElementById('githubConnected').style.display = 'none';
+    const repoNameSection = document.getElementById('repoNameSection');
+    if (repoNameSection) repoNameSection.style.display = 'block';
+  }
+}
+
+async function disconnectGitHub() {
+  try {
+    const response = await fetch(`${API}/github/disconnect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      showNotification('GitHub disconnected', 'info', 3000);
+      document.getElementById('githubNotConnected').style.display = 'block';
+      document.getElementById('githubConnecting').style.display = 'none';
+      document.getElementById('githubConnected').style.display = 'none';
+      // Show repo name section again
+      const repoNameSection = document.getElementById('repoNameSection');
+      if (repoNameSection) repoNameSection.style.display = 'block';
+    }
+  } catch (error) {
+    console.error('Disconnect error:', error);
+    showNotification(`Error: ${error.message}`, 'error', 5000);
+  }
+}
+
+async function createGitHubRepo() {
+  try {
+    const repoName = document.getElementById('cloudRepoName')?.value?.trim() || 'VersionControlBackup';
+
+    const response = await fetch(`${API}/github/create-repo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repoName })
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      // Show different message for new vs existing repo
+      if (data.existing) {
+        showNotification(`Using existing repository "${data.repo.name}"`, 'success', 3000);
+      } else {
+        showNotification(`Repository "${data.repo.name}" created!`, 'success', 3000);
+      }
+
+      // Update the hidden remote URL field
+      const urlField = document.getElementById('cloudRemoteUrl');
+      if (urlField) {
+        urlField.value = data.repo.clone_url;
+      }
+
+      return data.repo;
+    } else {
+      showNotification(`Failed to create repo: ${data.error}`, 'error', 5000);
+      return null;
+    }
+  } catch (error) {
+    console.error('Create repo error:', error);
+    showNotification(`Error: ${error.message}`, 'error', 5000);
+    return null;
   }
 }
 
@@ -1157,17 +2075,27 @@ function formatDateDisplay(bucket) {
   }
 }
 
+// Generic date formatter using browser/system locale defaults
+function getFormattedDate(dateInput) {
+  if (!dateInput) return '';
+  const date = new Date(dateInput);
+
+  // Using dateStyle and timeStyle allows the browser to pick the best format
+  // based on the user's system locale (Short/Medium dates, 12h vs 24h time)
+  // This is smarter than hardcoding unit components.
+  try {
+    return date.toLocaleString(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short'
+    });
+  } catch (e) {
+    // Fallback for older browsers
+    return date.toLocaleString();
+  }
+}
+
 function formatDateForLabel(dateString) {
-  if (!dateString) return '';
-  const date = new Date(dateString);
-  // Use browser default locale and options
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  });
+  return getFormattedDate(dateString);
 }
 
 // File path utilities
@@ -1325,6 +2253,14 @@ function navigateToPath(path) {
 function handleSortChange(value) {
   sortState[currentMode] = value;
   localStorage.setItem(`sort_${currentMode}`, value);
+
+  // If 'deleted' is selected, load deleted items instead of sorting
+  if (value === 'deleted') {
+    if (currentMode === 'files') loadDeletedFiles();
+    else if (currentMode === 'automations') loadDeletedAutomations();
+    else if (currentMode === 'scripts') loadDeletedScripts();
+    return;
+  }
 
   // Reload current view to apply sort
   if (currentMode === 'files') loadFiles();
@@ -1738,9 +2674,9 @@ async function displayCommits(commits) {
         fileName = fileName.replace(/^["']|["']$/g, '');
 
         html += `
-              <div class="commit" onclick="showCommit('${commit.hash}')" id="commit-${commit.hash}">
+              <div class="commit" onclick="showCommit('${commit.hash}')" oncontextmenu="showTimelineContextMenu(event, '${commit.hash}')" id="commit-${commit.hash}">
                 <div class="commit-time">${timeString}</div>
-                <div class="commit-file">${fileName}</div>
+                <div class="commit-file" title="${fileName}">${fileName}</div>
               </div>
             `;
       }
@@ -1754,20 +2690,9 @@ async function displayCommits(commits) {
 
   document.getElementById('leftPanel').innerHTML = html;
 
-  // Auto-select the first commit if nothing is selected (or if the selected one is filtered out)
-  if (filteredCommits.length > 0) {
-    let commitToSelect = filteredCommits[0].hash;
-
-    // If we have a current selection that is still visible in the filtered list, keep it
-    if (currentSelection && currentSelection.type === 'commit' && filteredCommits.some(c => c.hash === currentSelection.hash)) {
-      commitToSelect = currentSelection.hash;
-    }
-
-    showCommit(commitToSelect);
-  } else {
-    document.getElementById('rightPanel').innerHTML = `<div class="empty">${t('timeline.select_commit')}</div>`;
-    document.getElementById('rightPanelActions').innerHTML = '';
-  }
+  // Show placeholder message - don't auto-select (matches Files/Automations/Scripts tabs behavior)
+  document.getElementById('rightPanel').innerHTML = `<div class="empty">${t('timeline.select_commit')}</div>`;
+  document.getElementById('rightPanelActions').innerHTML = '';
 
   // Update keyboard navigation
   const commitItems = Array.from(document.querySelectorAll('.commit'));
@@ -2195,6 +3120,10 @@ let currentFileHistoryIndex = 0; // Current position in history
 let isScanningHistory = false; // Flag to track if we are currently scanning history
 
 async function loadScripts() {
+  if (sortState.scripts === 'deleted') {
+    return loadDeletedScripts();
+  }
+
   const leftPanel = document.getElementById('leftPanel');
   leftPanel.innerHTML = `<div class="empty" data-i18n="app.loading">Loading...</div>`;
 
@@ -2215,6 +3144,10 @@ async function loadScripts() {
 }
 
 async function loadAutomations() {
+  if (sortState.automations === 'deleted') {
+    return loadDeletedAutomations();
+  }
+
   const leftPanel = document.getElementById('leftPanel');
   leftPanel.innerHTML = `<div class="empty" data-i18n="app.loading">Loading...</div>`;
 
@@ -2235,6 +3168,10 @@ async function loadAutomations() {
 }
 
 async function loadFiles() {
+  if (sortState.files === 'deleted') {
+    return loadDeletedFiles();
+  }
+
   const leftPanel = document.getElementById('leftPanel');
   leftPanel.innerHTML = `<div class="empty" data-i18n="app.loading">Loading...</div>`;
 
@@ -2255,6 +3192,161 @@ async function loadFiles() {
   } catch (error) {
     leftPanel.innerHTML = `<div class="error" data-i18n="files.error_loading">Error loading files: ${error.message}</div>`;
   }
+}
+
+// Load deleted files (files that exist in git history but not on disk)
+async function loadDeletedFiles() {
+  const leftPanel = document.getElementById('leftPanel');
+  leftPanel.innerHTML = `<div class="empty" data-i18n="app.loading">Loading...</div>`;
+
+  try {
+    const response = await fetch(`${API}/files/deleted`);
+    const data = await response.json();
+
+    if (data.success) {
+      data.files.sort((a, b) => new Date(b.lastSeenDate) - new Date(a.lastSeenDate));
+      displayDeletedFiles(data.files);
+    } else {
+      leftPanel.innerHTML = `<div class="error" data-i18n="files.error_loading">Error loading deleted files: ${data.error}</div>`;
+    }
+  } catch (error) {
+    leftPanel.innerHTML = `<div class="error" data-i18n="files.error_loading">Error loading deleted files: ${error.message}</div>`;
+  }
+}
+
+function displayDeletedFiles(files) {
+  const leftPanel = document.getElementById('leftPanel');
+
+  if (!files || files.length === 0) {
+    leftPanel.innerHTML = `<div class="empty" data-i18n="files.deleted_empty_state">${t('files.deleted_empty_state')}</div>`;
+    return;
+  }
+
+  leftPanel.innerHTML = files.map(file => {
+    const lastSeen = getFormattedDate(file.lastSeenDate);
+    const fileId = 'deleted-file-' + file.path.replace(/[:/\.]/g, '-');
+    return `
+      <div class="file deleted" id="${fileId}" onclick="selectDeletedFile('${escapeHtml(file.path)}', '${file.lastSeenHash}')">
+        <div class="file-path">
+          <div class="file-name">${escapeHtml(file.name)}</div>
+          <div class="file-path-text">${escapeHtml(file.path.replace(file.name, ''))}</div>
+          <div class="file-last-seen">${t('files.last_seen').replace('{date}', lastSeen)}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  document.getElementById('rightPanel').innerHTML = `<div class="empty">${t('files.select_file')}</div>`;
+}
+
+async function selectDeletedFile(filePath, lastSeenHash) {
+  // Load the file history for the deleted file
+  currentSelection = { type: 'deleted_file', path: filePath, hash: lastSeenHash };
+  await showFileHistory(filePath);
+}
+
+// Load deleted automations (automations that exist in git history but not in current config)
+async function loadDeletedAutomations() {
+  const leftPanel = document.getElementById('leftPanel');
+  leftPanel.innerHTML = `<div class="empty" data-i18n="app.loading">Loading...</div>`;
+
+  try {
+    const response = await fetch(`${API}/automations/deleted`);
+    const data = await response.json();
+
+    if (data.success) {
+      data.automations.sort((a, b) => new Date(b.lastSeenDate) - new Date(a.lastSeenDate));
+      displayDeletedAutomations(data.automations);
+    } else {
+      leftPanel.innerHTML = `<div class="error" data-i18n="automations.error_loading">Error loading deleted automations: ${data.error}</div>`;
+    }
+  } catch (error) {
+    leftPanel.innerHTML = `<div class="error" data-i18n="automations.error_loading">Error loading deleted automations: ${error.message}</div>`;
+  }
+}
+
+function displayDeletedAutomations(automations) {
+  const leftPanel = document.getElementById('leftPanel');
+
+  if (!automations || automations.length === 0) {
+    leftPanel.innerHTML = `<div class="empty" data-i18n="automations.deleted_empty_state">${t('automations.deleted_empty_state')}</div>`;
+    return;
+  }
+
+  leftPanel.innerHTML = automations.map(auto => {
+    const lastSeen = getFormattedDate(auto.lastSeenDate);
+    // Use the existing full ID from the API
+    const syntheticId = auto.id;
+    const autoId = 'deleted-auto-' + auto.id.replace(/[:/\.]/g, '-');
+    return `
+      <div class="file deleted" id="${autoId}" onclick="selectDeletedAutomation('${escapeHtml(syntheticId)}', '${escapeHtml(auto.name)}')">
+        <div class="file-path">
+          <div class="file-name">${escapeHtml(auto.name)}</div>
+          <div class="file-path-text">${escapeHtml(auto.file)}</div>
+          <div class="file-last-seen">${t('automations.last_seen').replace('{date}', lastSeen)}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  document.getElementById('rightPanel').innerHTML = `<div class="empty">${t('automations.select_automation')}</div>`;
+}
+
+async function selectDeletedAutomation(automationId, name) {
+  currentSelection = { type: 'deleted_automation', id: automationId, name: name };
+  await showAutomationHistory(automationId);
+}
+
+// Load deleted scripts (scripts that exist in git history but not in current config)
+async function loadDeletedScripts() {
+  const leftPanel = document.getElementById('leftPanel');
+  leftPanel.innerHTML = `<div class="empty" data-i18n="app.loading">Loading...</div>`;
+
+  try {
+    const response = await fetch(`${API}/scripts/deleted`);
+    const data = await response.json();
+
+    if (data.success) {
+      data.scripts.sort((a, b) => new Date(b.lastSeenDate) - new Date(a.lastSeenDate));
+      displayDeletedScripts(data.scripts);
+    } else {
+      leftPanel.innerHTML = `<div class="error" data-i18n="scripts.error_loading">Error loading deleted scripts: ${data.error}</div>`;
+    }
+  } catch (error) {
+    leftPanel.innerHTML = `<div class="error" data-i18n="scripts.error_loading">Error loading deleted scripts: ${error.message}</div>`;
+  }
+}
+
+function displayDeletedScripts(scripts) {
+  const leftPanel = document.getElementById('leftPanel');
+
+  if (!scripts || scripts.length === 0) {
+    leftPanel.innerHTML = `<div class="empty" data-i18n="scripts.deleted_empty_state">${t('scripts.deleted_empty_state')}</div>`;
+    return;
+  }
+
+  leftPanel.innerHTML = scripts.map(script => {
+    const lastSeen = getFormattedDate(script.lastSeenDate);
+    // Use the existing full ID from the API
+    const syntheticId = script.id;
+    const scriptItemId = 'deleted-script-' + script.id.replace(/[:/\.]/g, '-');
+    return `
+      <div class="file deleted" id="${scriptItemId}" onclick="selectDeletedScript('${escapeHtml(syntheticId)}', '${escapeHtml(script.name)}')">
+        <div class="file-path">
+          <div class="file-name">${escapeHtml(script.name)}</div>
+          <div class="file-path-text">${escapeHtml(script.file)}</div>
+          <div class="file-last-seen">${t('scripts.last_seen').replace('{date}', lastSeen)}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  document.getElementById('rightPanel').innerHTML = `<div class="empty">${t('scripts.select_script')}</div>`;
+}
+
+async function selectDeletedScript(scriptId, name) {
+  currentSelection = { type: 'deleted_script', id: scriptId, name: name };
+  await showScriptHistory(scriptId);
 }
 
 function createFolderBreadcrumb(filePath) {
@@ -2375,7 +3467,14 @@ function displayFileList(files) {
 
 async function showFileHistory(filePath) {
   document.querySelectorAll('.file').forEach(f => f.classList.remove('selected'));
-  const fileId = 'file-' + filePath.replace(/\//g, '-').replace(/\./g, '-');
+
+  let fileId;
+  if (sortState.files === 'deleted') {
+    fileId = 'deleted-file-' + filePath.replace(/[:/\.]/g, '-');
+  } else {
+    fileId = 'file-' + filePath.replace(/\//g, '-').replace(/\./g, '-');
+  }
+
   const element = document.getElementById(fileId);
   if (element) {
     element.classList.add('selected');
@@ -2390,7 +3489,12 @@ async function showFileHistory(filePath) {
     }
   }
 
-  currentSelection = { type: 'file', file: filePath };
+  // Preserve 'deleted_file' type if already set, otherwise set as regular file
+  if (currentSelection && currentSelection.type === 'deleted_file') {
+    currentSelection.file = filePath;
+  } else {
+    currentSelection = { type: 'file', file: filePath };
+  }
 
   try {
     // First get the current file content
@@ -2585,7 +3689,14 @@ function displayAutomations(automations) {
 
 async function showAutomationHistory(automationId) {
   document.querySelectorAll('.file').forEach(f => f.classList.remove('selected'));
-  const autoId = 'auto-' + automationId.replace(/[:/]/g, '-');
+
+  let autoId;
+  if (sortState.automations === 'deleted') {
+    autoId = 'deleted-auto-' + automationId.replace(/[:/\.]/g, '-');
+  } else {
+    autoId = 'auto-' + automationId.replace(/[:/]/g, '-');
+  }
+
   const element = document.getElementById(autoId);
   if (element) {
     element.classList.add('selected');
@@ -2600,85 +3711,127 @@ async function showAutomationHistory(automationId) {
     }
   }
 
-  currentSelection = { type: 'automation', id: automationId };
+  if (sortState.automations !== 'deleted') {
+    currentSelection = { type: 'automation', id: automationId };
+  }
+
+  // Get the automation name for immediate display
+  let auto = allAutomations.find(a => a.id === automationId);
+  const displayName = auto ? auto.name : (currentSelection?.name || 'Automation');
+
+  // Set up the panel title immediately (no loading placeholder - matches Files tab)
+  document.getElementById('rightPanelTitle').textContent = displayName;
+  document.getElementById('rightPanelActions').innerHTML = '';
+  document.getElementById('rightPanel').innerHTML = '';
 
   try {
-    const response = await fetch(`${API}/automation/${encodeURIComponent(automationId)}/history`);
-    const data = await response.json();
+    // PROGRESSIVE LOADING: First fetch just commit metadata (fast - no YAML parsing)
+    const metadataResponse = await fetch(`${API}/automation/${encodeURIComponent(automationId)}/history-metadata`);
+    const metadataResult = await metadataResponse.json();
 
-    if (data.success && data.history.length > 0) {
-      // Get the current automation content for comparison
-      const auto = allAutomations.find(a => a.id === automationId);
-      const currentContent = dumpYaml(auto.content);
+    if (!metadataResult.success || metadataResult.commits.length === 0) {
+      document.getElementById('rightPanel').innerHTML = `<div class="empty">${t('history.no_changes')}</div>`;
+      return;
+    }
 
-      // Initialize with empty history
-      currentAutomationHistory = [];
-      currentAutomationHistoryIndex = 0;
-      let lastKeptContent = null;
-      let isFirstVersion = true;
-      isScanningHistory = true;
+    // Handle deleted automations (which won't be found in allAutomations)
+    if (!auto && currentSelection && currentSelection.type === 'deleted_automation') {
+      const parts = automationId.split(':');
+      const file = parts.length >= 2 ? decodeURIComponent(parts[1]) : 'automations.yaml';
+      auto = {
+        id: automationId,
+        name: currentSelection.name,
+        file: file,
+        content: null
+      };
+    }
 
-      // Process versions progressively
-      for (let i = 0; i < data.history.length; i++) {
-        const commit = data.history[i];
-        const commitContent = dumpYaml(commit.automation);
+    // Get current content for comparison
+    let currentContent = '';
+    if (auto && auto.content) {
+      currentContent = dumpYaml(auto.content);
+    }
 
-        // Check if there are visible differences compared to the CURRENT version
-        const diffVsCurrent = generateDiff(commitContent, currentContent, {
-          returnNullIfNoChanges: true,
-          filePath: auto.file
-        });
+    // Initialize history state
+    currentAutomationHistory = [];
+    currentAutomationHistoryIndex = 0;
+    let lastKeptContent = null;
+    let isFirstVersion = true;
+    isScanningHistory = true;
 
-        // Skip if identical to live
-        if (diffVsCurrent === null) continue;
+    // PROGRESSIVE LOADING: Fetch content PER COMMIT (like Files tab)
+    for (let i = 0; i < metadataResult.commits.length; i++) {
+      const commit = metadataResult.commits[i];
 
-        // Check against the last kept version to avoid consecutive duplicates
-        if (lastKeptContent !== null) {
-          const diffVsLast = generateDiff(commitContent, lastKeptContent, {
-            returnNullIfNoChanges: true,
-            filePath: auto.file
-          });
-          if (diffVsLast === null) continue;
-        }
+      // Fetch content for this specific commit
+      const contentResponse = await fetch(`${API}/automation/${encodeURIComponent(automationId)}/at-commit?commitHash=${encodeURIComponent(commit.hash)}`);
+      const contentResult = await contentResponse.json();
 
-        // Add this version to history
-        currentAutomationHistory.push({
-          ...commit,
-          yamlContent: commitContent
-        });
-        lastKeptContent = commitContent;
-
-        // Display immediately when we find the first valid version
-        if (isFirstVersion) {
-          isFirstVersion = false;
-          // Set the panel title
-          document.getElementById('rightPanelTitle').textContent = auto ? auto.name : 'Automation';
-          document.getElementById('rightPanelActions').innerHTML = `<button class="btn restore" onclick="restoreAutomationVersion('${automationId}')" title="${t('diff.tooltip_overwrite_automation')}">${t('timeline.restore_commit')}</button>`;
-          displayAutomationHistory();
-        } else {
-          // Update the navigation controls for subsequent versions
-          updateAutomationHistoryNavigation();
-        }
+      if (!contentResult.success || !contentResult.automation) {
+        continue; // Skip commits where automation doesn't exist
       }
 
-      // Scanning complete
-      isScanningHistory = false;
-      if (currentAutomationHistory.length > 0) {
+      const commitContent = dumpYaml(contentResult.automation);
+
+      // Check if there are visible differences compared to the CURRENT version
+      const diffVsCurrent = generateDiff(commitContent, currentContent, {
+        returnNullIfNoChanges: true,
+        filePath: auto?.file
+      });
+
+      // Skip if identical to live
+      if (diffVsCurrent === null) continue;
+
+      // Check against the last kept version to avoid consecutive duplicates
+      if (lastKeptContent !== null) {
+        const diffVsLast = generateDiff(commitContent, lastKeptContent, {
+          returnNullIfNoChanges: true,
+          filePath: auto?.file
+        });
+        if (diffVsLast === null) continue;
+      }
+
+      // Add this version to history
+      currentAutomationHistory.push({
+        hash: commit.hash,
+        date: commit.date,
+        message: commit.message,
+        author: commit.author,
+        automation: contentResult.automation,
+        yamlContent: commitContent
+      });
+      lastKeptContent = commitContent;
+
+      // Display immediately when we find the first valid version (INSTANT!)
+      if (isFirstVersion) {
+        isFirstVersion = false;
+        document.getElementById('rightPanelTitle').textContent = auto ? auto.name : 'Automation';
+        document.getElementById('rightPanelActions').innerHTML = `<button class="btn restore" onclick="restoreAutomationVersion('${automationId}')" title="${t('diff.tooltip_overwrite_automation')}">${t('timeline.restore_commit')}</button>`;
+        displayAutomationHistory();
+      } else {
+        // Update the navigation controls for subsequent versions
         updateAutomationHistoryNavigation();
       }
+    }
 
-      // If no versions with changes were found, show current content as a no-change diff
-      if (currentAutomationHistory.length === 0) {
-        // Use the hash from the most recent commit in the full history
-        const mostRecentHash = data.history.length > 0 ? data.history[0].hash : '';
-        const mostRecentCommitDate = data.history.length > 0 ? data.history[0].date : new Date();
+    // Scanning complete
+    isScanningHistory = false;
+    if (currentAutomationHistory.length > 0) {
+      updateAutomationHistoryNavigation();
+    }
 
-        document.getElementById('rightPanelTitle').textContent = auto ? auto.name : 'Automation';
-        document.getElementById('itemsSubtitle').textContent = '';
-        document.getElementById('rightPanelActions').innerHTML = '';
+    // If no versions with changes were found, show current content as a no-change diff
+    if (currentAutomationHistory.length === 0) {
+      // Use the hash from the most recent commit in the full history
+      const mostRecentHash = metadataResult.commits.length > 0 ? metadataResult.commits[0].hash : '';
+      const mostRecentCommitDate = metadataResult.commits.length > 0 ? metadataResult.commits[0].date : new Date();
 
-        // Create a diff view container with header matching the change view
-        document.getElementById('rightPanel').innerHTML = `
+      document.getElementById('rightPanelTitle').textContent = auto ? auto.name : 'Automation';
+      document.getElementById('itemsSubtitle').textContent = '';
+      document.getElementById('rightPanelActions').innerHTML = '';
+
+      // Create a diff view container with header matching the change view
+      document.getElementById('rightPanel').innerHTML = `
           <div class="file-history-viewer">
             <div class="file-history-header">
               <div class="file-history-info">
@@ -2693,52 +3846,18 @@ async function showAutomationHistory(automationId) {
           </div>
         `;
 
-        // Render the current content as a no-change diff
-        renderDiff(currentContent, currentContent, document.getElementById('automationDiffContent'), {
-          leftLabel: 'Current Version',
-          rightLabel: 'Current Version',
-          filePath: auto.file
-        });
-      }
-    } else {
-      let debugHtml = '';
-      if (data.debugMessages && data.debugMessages.length > 0) {
-        debugHtml = `
-              <div class="debug-info" style="margin-top: 20px; padding: 10px; background-color: #333; border-radius: 5px;">
-                <h4>Debug Information:</h4>
-                <ul style="list-style-type: none; padding: 0; font-size: 0.8em;">
-                  ${data.debugMessages.map(msg => `<li>${escapeHtml(msg)}</li>`).join('')}
-                </ul>
-              </div>
-            `;
-      }
-      document.getElementById('rightPanel').innerHTML = `
-            <div class="empty">${t('history.no_changes')}</div>
-            ${debugHtml}
-          `;
-
-
+      // Render the current content as a no-change diff
+      renderDiff(currentContent, currentContent, document.getElementById('automationDiffContent'), {
+        leftLabel: 'Current Version',
+        rightLabel: 'Current Version',
+        filePath: auto?.file
+      });
     }
   } catch (error) {
     console.error('Error loading automation history:', error);
-    let debugHtml = '';
-    // If the error is from the fetch itself, data.debugMessages might not exist
-    if (error.debugMessages && error.debugMessages.length > 0) {
-      debugHtml = `
-            <div class="debug-info" style="margin-top: 20px; padding: 10px; background-color: #333; border-radius: 5px;">
-              <h4>Debug Information:</h4>
-              <ul style="list-style-type: none; padding: 0; font-size: 0.8em;">
-                ${error.debugMessages.map(msg => `<li>${escapeHtml(msg)}</li>`).join('')}
-              </ul>
-            </div>
-          `;
-    }
     document.getElementById('rightPanel').innerHTML = `
           <div class="empty">${t('history.error_loading', { error: error.message })}</div>
-          ${debugHtml}
         `;
-
-
   }
 }
 
@@ -2790,10 +3909,16 @@ async function loadAutomationHistoryDiff() {
   document.getElementById('autoPrevBtn').disabled = currentAutomationHistoryIndex === 0;
   document.getElementById('autoNextBtn').disabled = currentAutomationHistoryIndex === currentAutomationHistory.length - 1;
 
-  const auto = allAutomations.find(a => a.id === currentSelection.id);
+  // Handle deleted automations (which won't be found in allAutomations)
+  let auto = allAutomations.find(a => a.id === currentSelection.id);
+
+  if (!auto && currentSelection && currentSelection.type === 'deleted_automation') {
+    auto = { content: null, line: 0 };
+  }
+
   if (!auto) return;
 
-  const currentContent = dumpYaml(auto.content);
+  const currentContent = auto.content ? dumpYaml(auto.content) : '';
   let leftContent = '';
   let rightContent = '';
   let leftLabel = '';
@@ -2801,13 +3926,20 @@ async function loadAutomationHistoryDiff() {
 
   if (compareToCurrent) {
     // Compare to Current ON: Compare current version (left) vs commit version (right)
-    // Note: renderDiff swaps args, so we pass (right, left)
     const commitContent = currentCommit.yamlContent || dumpYaml(currentCommit.automation);
 
-    leftContent = currentContent;
-    rightContent = commitContent;
-    leftLabel = 'Current Version';
-    rightLabel = formatDateForBanner(currentCommit.date);
+    // For deleted automations, we want to show a single panel view of the historical content
+    if (currentSelection.type === 'deleted_automation') {
+      leftContent = commitContent;
+      rightContent = commitContent;
+      leftLabel = formatDateForBanner(currentCommit.date);
+      rightLabel = 'Content';
+    } else {
+      leftContent = currentContent;
+      rightContent = commitContent;
+      leftLabel = 'Current Version';
+      rightLabel = formatDateForBanner(currentCommit.date);
+    }
   } else {
     // Compare to Current OFF: Compare parent (left) vs commit (right)
     const commitContent = currentCommit.yamlContent || dumpYaml(currentCommit.automation);
@@ -2838,6 +3970,12 @@ async function loadAutomationHistoryDiff() {
     startLineOffset: startLine,
     filePath: 'automations.yaml'
   });
+
+  if ((diffHtml) || (currentSelection && currentSelection.type === 'deleted_automation')) {
+    document.getElementById('rightPanelActions').innerHTML = `<button class="btn restore" onclick="restoreAutomationVersion('${escapeHtml(currentSelection.id)}')" title="${t('diff.tooltip_overwrite_automation')}">${t('timeline.restore_commit')}</button>`;
+  } else {
+    document.getElementById('rightPanelActions').innerHTML = '';
+  }
 }
 
 function navigateAutomationHistory(direction) {
@@ -2903,7 +4041,14 @@ function displayScripts(scripts) {
 
 async function showScriptHistory(scriptId) {
   document.querySelectorAll('.file').forEach(f => f.classList.remove('selected'));
-  const scriptElId = 'script-' + scriptId.replace(/[:/]/g, '-');
+
+  let scriptElId;
+  if (sortState.scripts === 'deleted') {
+    scriptElId = 'deleted-script-' + scriptId.replace(/[:/\.]/g, '-');
+  } else {
+    scriptElId = 'script-' + scriptId.replace(/[:/]/g, '-');
+  }
+
   const element = document.getElementById(scriptElId);
   if (element) {
     element.classList.add('selected');
@@ -2918,85 +4063,125 @@ async function showScriptHistory(scriptId) {
     }
   }
 
-  currentSelection = { type: 'script', id: scriptId };
+  if (sortState.scripts !== 'deleted') {
+    currentSelection = { type: 'script', id: scriptId };
+  }
+
+  // Get the script name for immediate display
+  let script = allScripts.find(s => s.id === scriptId);
+  const displayName = script ? script.name : (currentSelection?.name || 'Script');
+
+  // Set up the panel title immediately (no loading placeholder - matches Files tab)
+  document.getElementById('rightPanelTitle').textContent = displayName;
+  document.getElementById('rightPanelActions').innerHTML = '';
+  document.getElementById('rightPanel').innerHTML = '';
 
   try {
-    const response = await fetch(`${API}/script/${encodeURIComponent(scriptId)}/history`);
-    const data = await response.json();
+    // PROGRESSIVE LOADING: First fetch just commit metadata (fast - no YAML parsing)
+    const metadataResponse = await fetch(`${API}/script/${encodeURIComponent(scriptId)}/history-metadata`);
+    const metadataResult = await metadataResponse.json();
 
-    if (data.success && data.history.length > 0) {
-      // Get the current script content for comparison
-      const script = allScripts.find(s => s.id === scriptId);
-      const currentContent = dumpYaml(script.content);
+    if (!metadataResult.success || metadataResult.commits.length === 0) {
+      document.getElementById('rightPanel').innerHTML = `<div class="empty">${t('history.no_changes')}</div>`;
+      return;
+    }
 
-      // Initialize with empty history
-      currentScriptHistory = [];
-      currentScriptHistoryIndex = 0;
-      let lastKeptContent = null;
-      let isFirstVersion = true;
-      isScanningHistory = true;
+    // Handle deleted scripts
+    if (!script && currentSelection && currentSelection.type === 'deleted_script') {
+      const parts = scriptId.split(':');
+      const file = parts.length >= 2 ? decodeURIComponent(parts[1]) : 'scripts.yaml';
+      script = {
+        id: scriptId,
+        name: currentSelection.name,
+        file: file,
+        content: null
+      };
+    }
 
-      // Process versions progressively
-      for (let i = 0; i < data.history.length; i++) {
-        const commit = data.history[i];
-        const commitContent = dumpYaml(commit.script);
+    // Get current content for comparison
+    let currentContent = '';
+    if (script && script.content) {
+      currentContent = dumpYaml(script.content);
+    }
 
-        // Check if there are visible differences compared to the CURRENT version
-        const diffVsCurrent = generateDiff(commitContent, currentContent, {
-          returnNullIfNoChanges: true,
-          filePath: script.file
-        });
+    // Initialize history state
+    currentScriptHistory = [];
+    currentScriptHistoryIndex = 0;
+    let lastKeptContent = null;
+    let isFirstVersion = true;
+    isScanningHistory = true;
 
-        // Skip if identical to live
-        if (diffVsCurrent === null) continue;
+    // PROGRESSIVE LOADING: Fetch content PER COMMIT (like Files tab)
+    for (let i = 0; i < metadataResult.commits.length; i++) {
+      const commit = metadataResult.commits[i];
 
-        // Check against the last kept version to avoid consecutive duplicates
-        if (lastKeptContent !== null) {
-          const diffVsLast = generateDiff(commitContent, lastKeptContent, {
-            returnNullIfNoChanges: true,
-            filePath: script.file
-          });
-          if (diffVsLast === null) continue;
-        }
+      // Fetch content for this specific commit
+      const contentResponse = await fetch(`${API}/script/${encodeURIComponent(scriptId)}/at-commit?commitHash=${encodeURIComponent(commit.hash)}`);
+      const contentResult = await contentResponse.json();
 
-        // Add this version to history
-        currentScriptHistory.push({
-          ...commit,
-          yamlContent: commitContent
-        });
-        lastKeptContent = commitContent;
-
-        // Display immediately when we find the first valid version
-        if (isFirstVersion) {
-          isFirstVersion = false;
-          // Set the panel title
-          document.getElementById('rightPanelTitle').textContent = script ? script.name : 'Script';
-          document.getElementById('rightPanelActions').innerHTML = `<button class="btn restore" onclick="restoreScriptVersion('${scriptId}')" title="${t('diff.tooltip_overwrite_script')}">${t('timeline.restore_commit')}</button>`;
-          displayScriptHistory();
-        } else {
-          // Update the navigation controls for subsequent versions
-          updateScriptHistoryNavigation();
-        }
+      if (!contentResult.success || !contentResult.script) {
+        continue; // Skip commits where script doesn't exist
       }
 
-      // Scanning complete
-      isScanningHistory = false;
-      if (currentScriptHistory.length > 0) {
+      const commitContent = dumpYaml(contentResult.script);
+
+      // Check if there are visible differences compared to the CURRENT version
+      const diffVsCurrent = generateDiff(commitContent, currentContent, {
+        returnNullIfNoChanges: true,
+        filePath: script?.file
+      });
+
+      // Skip if identical to live
+      if (diffVsCurrent === null) continue;
+
+      // Check against the last kept version to avoid consecutive duplicates
+      if (lastKeptContent !== null) {
+        const diffVsLast = generateDiff(commitContent, lastKeptContent, {
+          returnNullIfNoChanges: true,
+          filePath: script?.file
+        });
+        if (diffVsLast === null) continue;
+      }
+
+      // Add this version to history
+      currentScriptHistory.push({
+        hash: commit.hash,
+        date: commit.date,
+        message: commit.message,
+        author: commit.author,
+        script: contentResult.script,
+        yamlContent: commitContent
+      });
+      lastKeptContent = commitContent;
+
+      // Display immediately when we find the first valid version (INSTANT!)
+      if (isFirstVersion) {
+        isFirstVersion = false;
+        document.getElementById('rightPanelTitle').textContent = script ? script.name : 'Script';
+        document.getElementById('rightPanelActions').innerHTML = `<button class="btn restore" onclick="restoreScriptVersion('${scriptId}')" title="${t('diff.tooltip_overwrite_script')}">${t('timeline.restore_commit')}</button>`;
+        displayScriptHistory();
+      } else {
+        // Update the navigation controls for subsequent versions
         updateScriptHistoryNavigation();
       }
+    }
 
-      // If no versions with changes were found, show current content as a no-change diff
-      if (currentScriptHistory.length === 0) {
-        // Use the hash from the most recent commit in the full history
-        const mostRecentHash = data.history.length > 0 ? data.history[0].hash : '';
-        const mostRecentCommitDate = data.history.length > 0 ? data.history[0].date : new Date();
+    // Scanning complete
+    isScanningHistory = false;
+    if (currentScriptHistory.length > 0) {
+      updateScriptHistoryNavigation();
+    }
 
-        document.getElementById('rightPanelTitle').textContent = script ? script.name : 'Script';
-        document.getElementById('itemsSubtitle').textContent = '';
-        document.getElementById('rightPanelActions').innerHTML = '';
+    // If no versions with changes were found, show current content as a no-change diff
+    if (currentScriptHistory.length === 0) {
+      const mostRecentHash = metadataResult.commits.length > 0 ? metadataResult.commits[0].hash : '';
+      const mostRecentCommitDate = metadataResult.commits.length > 0 ? metadataResult.commits[0].date : new Date();
 
-        // Create a diff view container with header matching the change view
-        document.getElementById('rightPanel').innerHTML = `
+      document.getElementById('rightPanelTitle').textContent = script ? script.name : 'Script';
+      document.getElementById('itemsSubtitle').textContent = '';
+      document.getElementById('rightPanelActions').innerHTML = '';
+
+      document.getElementById('rightPanel').innerHTML = `
           <div class="file-history-viewer">
             <div class="file-history-header">
               <div class="file-history-info">
@@ -3011,52 +4196,17 @@ async function showScriptHistory(scriptId) {
           </div>
         `;
 
-        // Render the current content as a no-change diff
-        renderDiff(currentContent, currentContent, document.getElementById('scriptDiffContent'), {
-          leftLabel: 'Current Version',
-          rightLabel: 'Current Version',
-          filePath: script.file
-        });
-      }
-    } else {
-      let debugHtml = '';
-      if (data.debugMessages && data.debugMessages.length > 0) {
-        debugHtml = `
-              <div class="debug-info" style="margin-top: 20px; padding: 10px; background-color: #333; border-radius: 5px;">
-                <h4>Debug Information:</h4>
-                <ul style="list-style-type: none; padding: 0; font-size: 0.8em;">
-                  ${data.debugMessages.map(msg => `<li>${escapeHtml(msg)}</li>`).join('')}
-                </ul>
-              </div>
-            `;
-      }
-      document.getElementById('rightPanel').innerHTML = `
-            <div class="empty">${t('history.no_changes')}</div>
-            ${debugHtml}
-          `;
-
-
+      renderDiff(currentContent, currentContent, document.getElementById('scriptDiffContent'), {
+        leftLabel: 'Current Version',
+        rightLabel: 'Current Version',
+        filePath: script?.file
+      });
     }
   } catch (error) {
     console.error('Error loading script history:', error);
-    let debugHtml = '';
-    // If the error is from the fetch itself, data.debugMessages might not exist
-    if (error.debugMessages && error.debugMessages.length > 0) {
-      debugHtml = `
-            <div class="debug-info" style="margin-top: 20px; padding: 10px; background-color: #333; border-radius: 5px;">
-              <h4>Debug Information:</h4>
-              <ul style="list-style-type: none; padding: 0; font-size: 0.8em;">
-                ${error.debugMessages.map(msg => `<li>${escapeHtml(msg)}</li>`).join('')}
-              </ul>
-            </div>
-          `;
-    }
     document.getElementById('rightPanel').innerHTML = `
           <div class="empty">${t('history.error_loading', { error: error.message })}</div>
-          ${debugHtml}
         `;
-
-
   }
 }
 
@@ -3108,10 +4258,16 @@ async function loadScriptHistoryDiff() {
   document.getElementById('scriptPrevBtn').disabled = currentScriptHistoryIndex === 0;
   document.getElementById('scriptNextBtn').disabled = currentScriptHistoryIndex === currentScriptHistory.length - 1;
 
-  const script = allScripts.find(s => s.id === currentSelection.id);
+  let script = allScripts.find(s => s.id === currentSelection.id);
+
+  // Handle deleted scripts
+  if (!script && currentSelection && currentSelection.type === 'deleted_script') {
+    script = { content: null, line: 0 };
+  }
+
   if (!script) return;
 
-  const currentContent = dumpYaml(script.content);
+  const currentContent = script.content ? dumpYaml(script.content) : '';
   let leftContent = '';
   let rightContent = '';
   let leftLabel = '';
@@ -3121,10 +4277,18 @@ async function loadScriptHistoryDiff() {
     // Compare to Current ON: Compare current version (left) vs commit version (right)
     const commitContent = currentCommit.yamlContent || dumpYaml(currentCommit.script);
 
-    leftContent = currentContent;
-    rightContent = commitContent;
-    leftLabel = 'Current Version';
-    rightLabel = formatDateForBanner(currentCommit.date);
+    // For deleted scripts, we want to show a single panel view of the historical content
+    if (currentSelection.type === 'deleted_script') {
+      leftContent = commitContent;
+      rightContent = commitContent;
+      leftLabel = formatDateForBanner(currentCommit.date);
+      rightLabel = 'Content';
+    } else {
+      leftContent = currentContent;
+      rightContent = commitContent;
+      leftLabel = 'Current Version';
+      rightLabel = formatDateForBanner(currentCommit.date);
+    }
   } else {
     // Compare to Current OFF: Compare parent (left) vs commit (right)
     const commitContent = currentCommit.yamlContent || dumpYaml(currentCommit.script);
@@ -3153,6 +4317,12 @@ async function loadScriptHistoryDiff() {
     startLineOffset: startLine,
     filePath: 'scripts.yaml'
   });
+
+  if ((diffHtml) || (currentSelection && currentSelection.type === 'deleted_script')) {
+    document.getElementById('rightPanelActions').innerHTML = `<button class="btn restore" onclick="restoreScriptVersion('${escapeHtml(currentSelection.id)}')" title="${t('diff.tooltip_overwrite_script')}">${t('timeline.restore_commit')}</button>`;
+  } else {
+    document.getElementById('rightPanelActions').innerHTML = '';
+  }
 }
 
 function navigateScriptHistory(direction) {
@@ -3242,7 +4412,7 @@ function renderUnchangedView(content, options = {}) {
   });
 
   // Format commit date like "Nov 30, 2025 1:04 PM (2ec8a8d)"
-  const formattedDate = commitDate ? formatDateForBanner(commitDate) : new Date().toLocaleDateString();
+  const formattedDate = commitDate ? formatDateForBanner(commitDate) : getFormattedDate(new Date());
   const hashDisplay = commitHash ? ` (${commitHash.substring(0, 7)})` : '';
 
   // Wrap in file-history-viewer with header banner
@@ -3353,9 +4523,11 @@ function displayFileHistory(filePath) {
     return;
   }
 
-  // Set the panel title - add "(Added)" if the file was added
+  // Set the panel title - add "(Deleted)" if viewing a deleted file, or "(Added)" if the file was added
   let title = filePath;
-  if (currentFileHistory.length > 0) {
+  if (currentSelection && currentSelection.type === 'deleted_file') {
+    title += ' (Deleted)';
+  } else if (currentFileHistory.length > 0) {
     // Check if the oldest commit shows this file was added
     const oldestCommit = currentFileHistory[currentFileHistory.length - 1];
     if (oldestCommit && oldestCommit.status === 'A') {
@@ -3391,15 +4563,7 @@ function displayFileHistory(filePath) {
 }
 
 function formatDateForBanner(dateString) {
-  const date = new Date(dateString);
-  // Use browser default locale
-  return date.toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  });
+  return getFormattedDate(dateString);
 }
 
 function trimEmptyLines(lines) {
@@ -3447,7 +4611,23 @@ async function loadFileHistoryDiff(filePath) {
     const currentContentData = await currentContentResponse.json();
     const currentContent = currentContentData.success ? currentContentData.content : '';
 
-    if (isNewlyAdded) {
+    // Check if this is a deleted file
+    const isDeletedFile = currentSelection && currentSelection.type === 'deleted_file';
+
+    if (isDeletedFile) {
+      // For deleted files, show the historical version content and indicate the file no longer exists
+      const commitResponse = await fetch(`${API}/git/file-at-commit?filePath=${encodeURIComponent(filePath)}&commitHash=${currentCommit.hash}`);
+      const commitData = await commitResponse.json();
+      const commitContent = commitData.success ? commitData.content : '';
+
+      // For deleted files, we want to show a single panel view of the historical content
+      // To achieve this, we set rightContent to be the same as leftContent.
+      // This causes generateDiff to see no changes and render a single panel using the left label.
+      leftContent = commitContent;
+      rightContent = commitContent;
+      leftLabel = formatDateForBanner(currentCommit.date);
+      rightLabel = 'File Content';
+    } else if (isNewlyAdded) {
       // For newly added files, show the content as no-change diff
       leftContent = currentContent;
       rightContent = currentContent;
@@ -3497,9 +4677,10 @@ async function loadFileHistoryDiff(filePath) {
     filePath: filePath
   });
 
-  // Show restore button if there are changes (regardless of comparison mode)
-  if (diffHtml && !isNewlyAdded) {
-    document.getElementById('rightPanelActions').innerHTML = `<button class="btn restore" onclick="restoreFileVersion('${filePath}')" title="${t('diff.tooltip_overwrite_file')}">${t('timeline.restore_commit')}</button>`;
+  // Show restore button if there are changes (regardless of comparison mode) or if it's a deleted file
+  const isDeletedFile = currentSelection && currentSelection.type === 'deleted_file';
+  if ((diffHtml && !isNewlyAdded) || isDeletedFile) {
+    document.getElementById('rightPanelActions').innerHTML = `<button class="btn restore" onclick="restoreFileVersion('${escapeHtml(filePath)}')" title="${t('diff.tooltip_overwrite_file')}">${t('timeline.restore_commit')}</button>`;
   } else {
     document.getElementById('rightPanelActions').innerHTML = '';
   }
@@ -3521,7 +4702,7 @@ function navigateFileHistory(direction) {
 
 async function restoreFileVersion(filePath) {
   const currentCommit = currentFileHistory[currentFileHistoryIndex];
-  const commitDate = new Date(currentCommit.date).toLocaleString();
+  const commitDate = getFormattedDate(currentCommit.date);
   console.log(`[UI] User clicked restore for ${filePath} at commit ${currentCommit.hash.substring(0, 8)}`);
 
   // Restore directly without confirmation
@@ -3586,7 +4767,12 @@ async function viewDiff(file, hash) {
 }
 
 async function restoreAutomationVersion(automationId) {
-  const auto = allAutomations.find(a => a.id === automationId);
+  let auto = allAutomations.find(a => a.id === automationId);
+
+  if (!auto && currentSelection && currentSelection.type === 'deleted_automation' && currentSelection.id === automationId) {
+    auto = { id: automationId, name: currentSelection.name || 'Deleted Automation' };
+  }
+
   if (!auto) {
     showNotification('Automation not found', 'error');
     return;
@@ -3620,7 +4806,12 @@ async function restoreAutomationVersion(automationId) {
 }
 
 async function restoreScriptVersion(scriptId) {
-  const script = allScripts.find(s => s.id === scriptId);
+  let script = allScripts.find(s => s.id === scriptId);
+
+  if (!script && currentSelection && currentSelection.type === 'deleted_script' && currentSelection.id === scriptId) {
+    script = { id: scriptId, name: currentSelection.name || 'Deleted Script' };
+  }
+
   if (!script) {
     showNotification('Script not found', 'error');
     return;
@@ -3825,9 +5016,9 @@ function generateDiff(oldText, newText, options = {}) {
     }
 
     return `
-      <div class="segmented-control" style="cursor: default; grid-template-columns: 1fr;">
+      <div class="segmented-control" style="cursor: pointer; grid-template-columns: 1fr;" onclick="cycleDiffStyle()" title="Click to cycle diff styles">
         <div class="segmented-control-slider" style="width: calc(100% - 8px);"></div>
-        <label style="cursor: default; color: var(--text-primary);">${leftLabel}</label>
+        <label style="cursor: pointer; color: var(--text-primary);">${leftLabel}</label>
       </div>
       <div class="diff-viewer-shell ${currentDiffStyle}">
         <div class="diff-viewer-unified">
@@ -3844,11 +5035,11 @@ function generateDiff(oldText, newText, options = {}) {
   if (diffViewFormat === 'split') {
     return `
       ${styleSwitcherHtml}
-      <div class="segmented-control" style="cursor: default;">
+      <div class="segmented-control" style="cursor: pointer;" onclick="cycleDiffStyle()" title="Click to cycle diff styles">
         <input type="radio" name="diffHeaderSplit" id="diffHeaderLeft" checked disabled>
-        <label for="diffHeaderLeft" style="cursor: default;">${leftLabel}</label>
+        <label for="diffHeaderLeft" style="cursor: pointer;">${leftLabel}</label>
         <input type="radio" name="diffHeaderSplit" id="diffHeaderRight" disabled>
-        <label for="diffHeaderRight" style="cursor: default;">${rightLabel}</label>
+        <label for="diffHeaderRight" style="cursor: pointer;">${rightLabel}</label>
         <div class="segmented-control-slider"></div>
       </div>
       <div class="diff-viewer-shell ${currentDiffStyle}">
@@ -3861,7 +5052,7 @@ function generateDiff(oldText, newText, options = {}) {
     // Unified format (default)
     return `
       ${styleSwitcherHtml}
-      <div class="diff-header-unified">
+      <div class="diff-header-unified" style="cursor: pointer;" onclick="cycleDiffStyle()" title="Click to cycle diff styles">
         <div class="diff-header-text">
           ${leftLabel} vs ${rightLabel}
         </div>
@@ -4613,7 +5804,7 @@ async function showCommitRestorePreview(commitHash, commitDate) {
 
     // If commitDate is not provided, try to get it from the commit object
     if (!commitDate && commit) {
-      commitDate = new Date(commit.date).toLocaleString();
+      commitDate = getFormattedDate(commit.date);
     }
 
     // Show modal immediately with loading state
@@ -5276,81 +6467,32 @@ function blendColors(color1, color2, ratio) {
   return '#' + (0x1000000 + R * 0x10000 + G * 0x100 + B).toString(16).slice(1);
 }
 
-// Holiday design settings
-let holidayDesign = {
-  currentPlaidIndex: parseInt(localStorage.getItem('holidayPlaidIndex')) || 1,
-  ribbonWidth: parseInt(localStorage.getItem('holidayRibbonWidth')) || 19,
-  ribbonStyle: parseInt(localStorage.getItem('holidayRibbonStyle')) || 1,
-  ribbon3D: parseInt(localStorage.getItem('holidayRibbon3D')) || 10,
-  ribbonBrightness: localStorage.getItem('holidayRibbonBrightness') !== null ? parseInt(localStorage.getItem('holidayRibbonBrightness')) : -5,
-  plaidSize: parseInt(localStorage.getItem('holidayPlaidSize')) || 24,
-  paperGradientAngle: parseInt(localStorage.getItem('holidayPaperGradientAngle')) || 177,
-  paperGradientIntensity: parseInt(localStorage.getItem('holidayPaperGradientIntensity')) || 30,
-  paperShine: parseInt(localStorage.getItem('holidayPaperShine')) || 4,
-  paperShineIntensity: parseInt(localStorage.getItem('holidayPaperShineIntensity')) || 10,
-  bowSize: parseInt(localStorage.getItem('holidayBowSize')) || 139,
-  bowOffset: parseInt(localStorage.getItem('holidayBowOffset')) || 53,
-  bowShadow: parseInt(localStorage.getItem('holidayBowShadow')) || 6,
-  bowShadowSpread: parseInt(localStorage.getItem('holidayBowShadowSpread')) || 3,
-  bowStyle: parseInt(localStorage.getItem('holidayBowStyle')) || 1,
-  borderEnabled: localStorage.getItem('holidayBorderEnabled') === 'true',
-  borderWidth: parseInt(localStorage.getItem('holidayBorderWidth')) || 2,
-  borderColor: localStorage.getItem('holidayBorderColor') || '#D4AF37'
-};
-
-// Ribbon gradient styles
-const RIBBON_STYLES = [
-  { name: 'Red Satin', colors: ['#5A0008', '#960011', '#B81520', '#960011', '#5A0008', '#400006'] },
-  { name: 'Gold Satin', colors: ['#B8960C', '#D4AF37', '#F4CF47', '#D4AF37', '#B8960C', '#A07D00'] },
-  { name: 'Green Velvet', colors: ['#0D3D0D', '#1B5E20', '#2E7D32', '#1B5E20', '#0D3D0D', '#052505'] },
-  { name: 'Royal Blue', colors: ['#0D47A1', '#1565C0', '#1976D2', '#1565C0', '#0D47A1', '#052560'] },
-  { name: 'Purple Silk', colors: ['#4A148C', '#6A1B9A', '#7B1FA2', '#6A1B9A', '#4A148C', '#38006b'] },
-  { name: 'Silver Frost', colors: ['#455A64', '#607D8B', '#78909C', '#607D8B', '#455A64', '#37474F'] },
-  { name: 'Rose Gold', colors: ['#8B5A5A', '#C78585', '#E0A0A0', '#C78585', '#8B5A5A', '#6B4040'] },
-  { name: 'Candy Cane', colors: ['#D32F2F', '#FFFFFF', '#D32F2F', '#FFFFFF', '#D32F2F', '#B71C1C'] }
-];
-
-// Paper shine/gradient effects
-const PAPER_SHINE_EFFECTS = [
-  { name: 'None', css: '' },
-  { name: 'Diagonal Shine', css: (i) => `linear-gradient(135deg, transparent 0%, rgba(255,255,255,${i / 100}) 25%, transparent 50%, rgba(255,255,255,${i / 200}) 75%, transparent 100%)` },
-  { name: 'Top Glow', css: (i) => `linear-gradient(to bottom, rgba(255,255,255,${i / 100}) 0%, transparent 30%, transparent 100%)` },
-  { name: 'Center Spotlight', css: (i) => `radial-gradient(ellipse at center, rgba(255,255,255,${i / 100}) 0%, transparent 50%)` },
-  { name: 'Vignette', css: (i) => `radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,${i / 100}) 100%)` },
-  { name: 'Shimmer', css: (i) => `repeating-linear-gradient(45deg, transparent 0px, transparent 10px, rgba(255,255,255,${i / 200}) 10px, rgba(255,255,255,${i / 200}) 11px)` },
-  { name: 'Glossy', css: (i) => `linear-gradient(to bottom, rgba(255,255,255,${i / 80}) 0%, transparent 40%, transparent 60%, rgba(0,0,0,${i / 150}) 100%)` }
-];
-
-// Toggle Holiday Mode - onclick fires BEFORE checkbox changes, so invert logic
-function toggleHolidayMode() {
-  const checkbox = document.getElementById('holidayMode');
+// Toggle Winter Mode
+function toggleWinterMode() {
+  const checkbox = document.getElementById('winterMode');
   // Since onclick fires before the checkbox value changes, we check the OPPOSITE
   const willBeEnabled = !checkbox.checked;
 
   if (willBeEnabled) {
-    document.body.classList.add('holiday-mode');
+    document.body.classList.add('winter-mode');
     createSnowflakes();
-    applyHolidayDesign();
-    localStorage.setItem('holidayModeEnabled', 'true');
+    localStorage.setItem('winterModeEnabled', 'true');
   } else {
-    document.body.classList.remove('holiday-mode');
+    document.body.classList.remove('winter-mode');
     clearSnowflakes();
-    hideHolidayDesignPanel();
-    localStorage.setItem('holidayModeEnabled', 'false');
+    localStorage.setItem('winterModeEnabled', 'false');
   }
 }
 
-// Initialize Holiday Mode from localStorage
-function initHolidayMode() {
-  const saved = localStorage.getItem('holidayModeEnabled');
-  const checkbox = document.getElementById('holidayMode');
+// Initialize Winter Mode from localStorage
+function initWinterMode() {
+  const saved = localStorage.getItem('winterModeEnabled');
+  const checkbox = document.getElementById('winterMode');
 
   if (saved === 'true') {
     checkbox.checked = true;
-    document.body.classList.add('holiday-mode');
+    document.body.classList.add('winter-mode');
     createSnowflakes();
-    applyHolidayDesign();
-    // showHolidayDesignPanel(); // Panel hidden by default now
   }
 }
 
@@ -5403,439 +6545,217 @@ function clearSnowflakes() {
   }
 }
 
-// Show holiday design adjustment panel
-function showHolidayDesignPanel() {
-  // Remove existing panel if any
-  hideHolidayDesignPanel();
+async function handleCloudProviderChange() {
+  const isGithub = document.getElementById('cloudProviderGithub').checked;
+  const githubSection = document.getElementById('githubConfigSection');
+  const customSection = document.getElementById('customConfigSection');
+  const urlInput = document.getElementById('cloudRemoteUrl');
 
-  const currentPattern = PLAID_PATTERNS[holidayDesign.currentPlaidIndex];
-
-  const panel = document.createElement('div');
-  panel.id = 'holidayDesignPanel';
-  panel.innerHTML = `
-    <div class="holiday-panel-header">
-      <span>🎁 Present Designer</span>
-      <button onclick="hideHolidayDesignPanel()" style="background:none;border:none;color:white;font-size:18px;cursor:pointer;">×</button>
-    </div>
-    <div class="holiday-panel-content" style="max-height: 70vh; overflow-y: auto;">
-      
-      <!-- Pattern Section -->
-      <div class="holiday-section">
-        <div class="holiday-section-title">🎨 Pattern</div>
-        <div class="holiday-control" style="text-align:center; padding: 8px 0; background: rgba(255,255,255,0.05); border-radius: 8px;">
-          <div style="font-size: 14px; color: #D4AF37; font-weight: 600;" id="currentPatternName">${currentPattern.name}</div>
-        </div>
-        <div class="holiday-control">
-          <label>Pattern Scale: <span id="plaidSizeVal">${holidayDesign.plaidSize}px</span></label>
-          <input type="range" min="15" max="60" value="${holidayDesign.plaidSize}" oninput="updateHolidayDesign('plaidSize', this.value)">
-        </div>
-      </div>
-      
-      <!-- Bow Section -->
-      <div class="holiday-section">
-        <div class="holiday-section-title">🎀 Bow</div>
-        <div class="holiday-control">
-          <label>Bow Style:</label>
-          <div style="display: flex; gap: 8px; margin-top: 6px;">
-            <button onclick="updateHolidayDesign('bowStyle', 1)" style="flex:1; padding: 8px; border-radius: 6px; border: 2px solid ${holidayDesign.bowStyle === 1 ? '#D4AF37' : '#444'}; background: ${holidayDesign.bowStyle === 1 ? 'rgba(212,175,55,0.2)' : '#333'}; color: white; cursor: pointer;">Bow 1</button>
-            <button onclick="updateHolidayDesign('bowStyle', 2)" style="flex:1; padding: 8px; border-radius: 6px; border: 2px solid ${holidayDesign.bowStyle === 2 ? '#D4AF37' : '#444'}; background: ${holidayDesign.bowStyle === 2 ? 'rgba(212,175,55,0.2)' : '#333'}; color: white; cursor: pointer;">Bow 2</button>
-            <button onclick="updateHolidayDesign('bowStyle', 3)" style="flex:1; padding: 8px; border-radius: 6px; border: 2px solid ${holidayDesign.bowStyle === 3 ? '#D4AF37' : '#444'}; background: ${holidayDesign.bowStyle === 3 ? 'rgba(212,175,55,0.2)' : '#333'}; color: white; cursor: pointer;">Bow 3</button>
-          </div>
-        </div>
-        <div class="holiday-control">
-          <label>Size: <span id="bowSizeVal">${holidayDesign.bowSize}px</span></label>
-          <input type="range" min="40" max="180" value="${holidayDesign.bowSize}" oninput="updateHolidayDesign('bowSize', this.value)">
-        </div>
-        <div class="holiday-control">
-          <label>Position: <span id="bowOffsetVal">${holidayDesign.bowOffset}px</span></label>
-          <input type="range" min="-30" max="60" value="${holidayDesign.bowOffset}" oninput="updateHolidayDesign('bowOffset', this.value)">
-        </div>
-        <div class="holiday-control">
-          <label>Shadow Blur: <span id="bowShadowVal">${holidayDesign.bowShadow}px</span></label>
-          <input type="range" min="0" max="30" value="${holidayDesign.bowShadow}" oninput="updateHolidayDesign('bowShadow', this.value)">
-        </div>
-        <div class="holiday-control">
-          <label>Shadow Spread: <span id="bowShadowSpreadVal">${holidayDesign.bowShadowSpread}px</span></label>
-          <input type="range" min="0" max="40" value="${holidayDesign.bowShadowSpread}" oninput="updateHolidayDesign('bowShadowSpread', this.value)">
-        </div>
-      </div>
-      
-      <!-- Ribbon Section -->
-      <div class="holiday-section">
-        <div class="holiday-section-title">🎗️ Ribbon</div>
-        <div class="holiday-control">
-          <label>Style: <span style="color: #D4AF37;">${RIBBON_STYLES[holidayDesign.ribbonStyle - 1]?.name || 'Red Satin'}</span></label>
-          <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;">
-            ${RIBBON_STYLES.map((style, i) => `
-              <button onclick="updateHolidayDesign('ribbonStyle', ${i + 1})" 
-                style="width: 28px; height: 28px; border-radius: 4px; border: 2px solid ${holidayDesign.ribbonStyle === i + 1 ? 'white' : 'transparent'}; 
-                background: linear-gradient(to right, ${style.colors[0]}, ${style.colors[2]}, ${style.colors[4]}); cursor: pointer;" 
-                title="${style.name}"></button>
-            `).join('')}
-          </div>
-        </div>
-        <div class="holiday-control">
-          <label>Width: <span id="ribbonWidthVal">${holidayDesign.ribbonWidth}px</span></label>
-          <input type="range" min="10" max="40" value="${holidayDesign.ribbonWidth}" oninput="updateHolidayDesign('ribbonWidth', this.value)">
-        </div>
-        <div class="holiday-control">
-          <label>3D Effect: <span id="ribbon3DVal">${holidayDesign.ribbon3D}%</span></label>
-          <input type="range" min="0" max="100" value="${holidayDesign.ribbon3D}" oninput="updateHolidayDesign('ribbon3D', this.value)">
-        </div>
-        <div class="holiday-control">
-          <label>Brightness: <span id="ribbonBrightnessVal">${holidayDesign.ribbonBrightness}%</span></label>
-          <input type="range" min="-50" max="50" value="${holidayDesign.ribbonBrightness}" oninput="updateHolidayDesign('ribbonBrightness', this.value)">
-        </div>
-      </div>
-      
-      <!-- Paper Shine Section -->
-      <div class="holiday-section">
-        <div class="holiday-section-title">✨ Paper Effect</div>
-        <div class="holiday-control">
-          <label>Gradient Angle: <span id="paperGradientAngleVal">${holidayDesign.paperGradientAngle}°</span></label>
-          <input type="range" min="0" max="360" value="${holidayDesign.paperGradientAngle}" oninput="updateHolidayDesign('paperGradientAngle', this.value)">
-        </div>
-        <div class="holiday-control">
-          <label>Gradient Intensity: <span id="paperGradientIntensityVal">${holidayDesign.paperGradientIntensity}%</span></label>
-          <input type="range" min="0" max="100" value="${holidayDesign.paperGradientIntensity}" oninput="updateHolidayDesign('paperGradientIntensity', this.value)">
-        </div>
-        <div class="holiday-control">
-          <label>Effect: <span style="color: #D4AF37;">${PAPER_SHINE_EFFECTS[holidayDesign.paperShine]?.name || 'None'}</span></label>
-          <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;">
-            ${PAPER_SHINE_EFFECTS.map((effect, i) => `
-              <button onclick="updateHolidayDesign('paperShine', ${i})" 
-                style="padding: 4px 8px; border-radius: 4px; border: 2px solid ${holidayDesign.paperShine === i ? '#D4AF37' : '#444'}; 
-                background: ${holidayDesign.paperShine === i ? 'rgba(212,175,55,0.2)' : '#333'}; color: white; cursor: pointer; font-size: 10px;" 
-                title="${effect.name}">${effect.name}</button>
-            `).join('')}
-          </div>
-        </div>
-        <div class="holiday-control">
-          <label>Intensity: <span id="paperShineIntensityVal">${holidayDesign.paperShineIntensity}%</span></label>
-          <input type="range" min="10" max="80" value="${holidayDesign.paperShineIntensity}" oninput="updateHolidayDesign('paperShineIntensity', this.value)">
-        </div>
-      </div>
-      
-      <!-- Border Section -->
-      <div class="holiday-section">
-        <div class="holiday-section-title">📦 Border</div>
-        <div class="holiday-control" style="display: flex; justify-content: space-between; align-items: center;">
-          <label style="margin-bottom: 0;">Show Border</label>
-          <label class="toggle-switch-mini">
-            <input type="checkbox" ${holidayDesign.borderEnabled ? 'checked' : ''} onchange="updateHolidayDesign('borderEnabled', this.checked)">
-            <span class="toggle-slider-mini"></span>
-          </label>
-        </div>
-        <div class="holiday-control">
-          <label>Width: <span id="borderWidthVal">${holidayDesign.borderWidth}px</span></label>
-          <input type="range" min="1" max="8" value="${holidayDesign.borderWidth}" oninput="updateHolidayDesign('borderWidth', this.value)">
-        </div>
-        <div class="holiday-control">
-          <label>Color:</label>
-          <div style="display: flex; gap: 6px; margin-top: 6px;">
-            <button onclick="updateHolidayDesign('borderColor', '#D4AF37')" style="width:28px; height:28px; border-radius:50%; border: 2px solid ${holidayDesign.borderColor === '#D4AF37' ? 'white' : 'transparent'}; background: #D4AF37; cursor:pointer;" title="Gold"></button>
-            <button onclick="updateHolidayDesign('borderColor', '#960011')" style="width:28px; height:28px; border-radius:50%; border: 2px solid ${holidayDesign.borderColor === '#960011' ? 'white' : 'transparent'}; background: #960011; cursor:pointer;" title="Red"></button>
-            <button onclick="updateHolidayDesign('borderColor', '#1B5E20')" style="width:28px; height:28px; border-radius:50%; border: 2px solid ${holidayDesign.borderColor === '#1B5E20' ? 'white' : 'transparent'}; background: #1B5E20; cursor:pointer;" title="Green"></button>
-            <button onclick="updateHolidayDesign('borderColor', '#FFFFFF')" style="width:28px; height:28px; border-radius:50%; border: 2px solid ${holidayDesign.borderColor === '#FFFFFF' ? '#D4AF37' : '#666'}; background: #FFFFFF; cursor:pointer;" title="White"></button>
-            <button onclick="updateHolidayDesign('borderColor', '#000000')" style="width:28px; height:28px; border-radius:50%; border: 2px solid ${holidayDesign.borderColor === '#000000' ? 'white' : '#666'}; background: #000000; cursor:pointer;" title="Black"></button>
-          </div>
-        </div>
-      </div>
-      
-    </div>
-  `;
-  document.body.appendChild(panel);
-}
-
-// Hide holiday design panel
-function hideHolidayDesignPanel() {
-  const panel = document.getElementById('holidayDesignPanel');
-  if (panel) {
-    panel.remove();
-  }
-}
-
-// Update holiday design setting
-function updateHolidayDesign(setting, value) {
-  // Handle different value types
-  if (setting === 'borderEnabled') {
-    holidayDesign[setting] = value === true || value === 'true';
-  } else if (setting === 'borderColor') {
-    holidayDesign[setting] = value;
+  if (isGithub) {
+    githubSection.style.display = 'block';
+    customSection.style.display = 'none';
+    // Refresh GitHub user state when switching to it
+    loadGitHubUser();
   } else {
-    holidayDesign[setting] = parseInt(value);
+    githubSection.style.display = 'none';
+    customSection.style.display = 'block';
+
+    // When switching to Custom, restore the stored Custom URL and connected state
+    try {
+      const response = await fetch(`${API}/cloud-sync/settings`);
+      const data = await response.json();
+      if (data.success && data.settings.customRemoteUrl) {
+        // Restore URL to input
+        if (urlInput) {
+          urlInput.value = data.settings.customRemoteUrl;
+        }
+
+        // Show connected state
+        const customNotConnected = document.getElementById('customNotConnected');
+        const customConnected = document.getElementById('customConnected');
+        const repoLink = document.getElementById('customRepoLink');
+
+        if (customNotConnected && customConnected) {
+          customNotConnected.style.display = 'none';
+          customConnected.style.display = 'block';
+
+          if (repoLink) {
+            const cleanUrl = stripTokenFromUrl(data.settings.customRemoteUrl);
+            const parts = cleanUrl.replace(/\.git$/, '').split('/').filter(p => p);
+            // Show User/Owner (2nd to last part) or fallback to Repo Name (last part)
+            const repoName = parts.length >= 2 ? parts[parts.length - 2] : (parts.pop() || 'Repository');
+            repoLink.textContent = repoName;
+            repoLink.href = cleanUrl.replace(/\.git$/, '');
+
+            // Try to load avatar
+            updateCustomRepoAvatar(data.settings.customRemoteUrl);
+          }
+        }
+      } else {
+        // No custom URL - show input state
+        const customNotConnected = document.getElementById('customNotConnected');
+        const customConnected = document.getElementById('customConnected');
+        if (customNotConnected) customNotConnected.style.display = 'block';
+        if (customConnected) customConnected.style.display = 'none';
+      }
+    } catch (e) {
+      console.log('[handleCloudProviderChange] Could not fetch custom URL:', e);
+    }
   }
 
-  // Update display value if it exists
-  const valSpan = document.getElementById(setting + 'Val');
-  if (valSpan && typeof value !== 'boolean') {
-    valSpan.textContent = value + (setting !== 'borderColor' ? 'px' : '');
-  }
-
-  // Save to localStorage
-  localStorage.setItem('holiday' + setting.charAt(0).toUpperCase() + setting.slice(1), value);
-
-  // Refresh panel for certain settings to update button states
-  if (setting === 'bowStyle' || setting === 'borderColor' || setting === 'borderEnabled' || setting === 'ribbonStyle' || setting === 'paperShine') {
-    showHolidayDesignPanel();
-  }
-
-  // Apply changes
-  applyHolidayDesign();
+  // Auto-save settings when provider changes (silent - no notification)
+  // This ensures Push Now immediately uses the new provider
+  await saveCloudSyncSettings(true);
 }
 
-// Apply holiday design CSS dynamically
-function applyHolidayDesign() {
-  let styleEl = document.getElementById('holidayDynamicStyle');
-  if (!styleEl) {
-    styleEl = document.createElement('style');
-    styleEl.id = 'holidayDynamicStyle';
-    document.head.appendChild(styleEl);
+// ============================
+// Timeline Context Menu (Right-click)
+// ============================
+
+let contextMenuTarget = null;
+
+function showTimelineContextMenu(event, commitHash) {
+  event.preventDefault();
+  event.stopPropagation();
+
+  contextMenuTarget = commitHash;
+
+  // Remove any existing context menu
+  hideTimelineContextMenu();
+
+  // Get commit info for display
+  const commit = allCommits.find(c => c.hash === commitHash);
+  const commitDate = commit ? new Date(commit.date).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  }) : commitHash.substring(0, 8);
+
+  // Count commits that will be removed
+  const commitIndex = allCommits.findIndex(c => c.hash === commitHash);
+  const commitsToRemove = commitIndex; // Commits before this one in the array (newer)
+
+  // Create context menu
+  const menu = document.createElement('div');
+  menu.id = 'timeline-context-menu';
+  menu.className = 'context-menu';
+  menu.innerHTML = `
+    <div class="context-menu-item" onclick="confirmSoftReset('${commitHash}', ${commitsToRemove})">
+      <span class="context-menu-text">Reset Timeline Here</span>
+    </div>
+    <div class="context-menu-separator"></div>
+    <div class="context-menu-item" onclick="restoreAllFilesFromContext('${commitHash}')">
+      <span class="context-menu-text">Restore All Files Here</span>
+    </div>
+  `;
+  console.log('[context-menu] Menu created for commit:', commitHash, 'commits to remove:', commitsToRemove);
+
+  // Position menu at cursor
+  menu.style.left = event.pageX + 'px';
+  menu.style.top = event.pageY + 'px';
+
+  document.body.appendChild(menu);
+
+  // Close menu when clicking elsewhere
+  setTimeout(() => {
+    document.addEventListener('click', hideTimelineContextMenu, { once: true });
+    document.addEventListener('contextmenu', hideTimelineContextMenu, { once: true });
+  }, 0);
+}
+
+function hideTimelineContextMenu() {
+  const menu = document.getElementById('timeline-context-menu');
+  if (menu) {
+    menu.remove();
+  }
+}
+
+function restoreAllFilesFromContext(commitHash) {
+  hideTimelineContextMenu();
+  showHardResetConfirmation(commitHash);
+}
+
+function confirmSoftReset(commitHash, commitsToRemove) {
+  console.log('[confirmSoftReset] Called with:', commitHash, commitsToRemove);
+  hideTimelineContextMenu();
+
+  // Get commit info for display (same format as hard reset)
+  const commit = allCommits.find(c => c.hash === commitHash);
+  let formattedDate = 'Unknown';
+  if (commit) {
+    const dateObj = new Date(commit.date);
+    const options = {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+      hour12: true
+    };
+    formattedDate = dateObj.toLocaleString('en-US', options).replace(/,/g, '');
   }
 
-  const { currentPlaidIndex, ribbonWidth, ribbonStyle, ribbon3D, ribbonBrightness = 0, plaidSize, paperGradientAngle, paperGradientIntensity, paperShine, paperShineIntensity, bowSize, bowOffset, bowShadow, bowShadowSpread, bowStyle, borderEnabled, borderWidth, borderColor } = holidayDesign;
+  // Check if this is the most recent commit
+  if (commitsToRemove === 0) {
+    showNotification('This is already the most recent version', 'info', 3000);
+    return;
+  }
 
-  // Get current plaid pattern
-  const pattern = PLAID_PATTERNS[currentPlaidIndex];
-  const wrapBg = generatePlaidPattern(pattern, plaidSize, paperGradientAngle, paperGradientIntensity);
-
-  // Get ribbon colors with 3D effect applied
-  const ribbon = RIBBON_STYLES[ribbonStyle - 1] || RIBBON_STYLES[0];
-
-  // Apply brightness to base colors
-  const baseColors = ribbon.colors.map(color => {
-    if (ribbonBrightness > 0) return lightenColor(color, ribbonBrightness);
-    if (ribbonBrightness < 0) return darkenColor(color, Math.abs(ribbonBrightness));
-    return color;
-  });
-
-  const [r0, r1, r2, r3, r4, r5] = baseColors;
-  // ribbon3D 0% = flat (all same color), 100% = full gradient
-  const effect3D = ribbon3D / 100;
-  // Blend colors based on 3D effect (when 0%, all look like r1)
-  const rb0 = effect3D < 0.5 ? blendColors(r1, r0, effect3D * 2) : r0;
-  const rb2 = effect3D < 0.5 ? blendColors(r1, r2, effect3D * 2) : r2;
-  const rb5 = effect3D < 0.5 ? blendColors(r1, r5, effect3D * 2) : r5;
-
-  // Get paper shine effect
-  const shineEffect = PAPER_SHINE_EFFECTS[paperShine];
-  const shineCss = shineEffect && shineEffect.css ? (typeof shineEffect.css === 'function' ? shineEffect.css(paperShineIntensity) + ',' : '') : '';
-
-  // Bow image selection
-  const bowImage = bowStyle === 3 ? 'images/holiday_bow_3.png' : bowStyle === 2 ? 'images/holiday_bow_2.png' : 'images/holiday_bow.png';
-
-  // Border style
-  const borderStyle = borderEnabled ? `${borderWidth}px solid ${borderColor}` : 'none';
-
-  styleEl.textContent = `
-    /* Dynamic Holiday Styles */
-    body.holiday-mode .header {
-      background: 
-        /* Paper shine effect */
-        ${shineCss}
-        /* Horizontal ribbon */
-        linear-gradient(
-          to bottom,
-          transparent calc(50% - ${ribbonWidth / 2}px),
-          ${rb0} calc(50% - ${ribbonWidth / 2}px),
-          ${r1} calc(50% - ${ribbonWidth / 2 - 2}px),
-          ${rb2} calc(50% - 2px),
-          ${r1} 50%,
-          ${rb2} calc(50% + 2px),
-          ${r1} calc(50% + ${ribbonWidth / 2 - 2}px),
-          ${rb0} calc(50% + ${ribbonWidth / 2}px),
-          transparent calc(50% + ${ribbonWidth / 2}px)
-        ),
-        ${wrapBg};
-      /* cursor: pointer; removed */
-      position: relative;
-      border: ${borderStyle} !important;
-    }
-    
-    /* Active removed */
-    
-    /* Vertical ribbon */
-    body.holiday-mode .header::before {
-      width: ${ribbonWidth}px;
-      background: linear-gradient(
-        to right,
-        ${rb0} 0%,
-        ${r1} 15%,
-        ${rb2} 40%,
-        ${r1} 60%,
-        ${rb0} 85%,
-        ${rb5} 100%
-      );
-    }
-    
-    /* Bow */
-    body.holiday-mode .header::after {
-      content: '';
-      position: absolute;
-      top: calc(-${bowSize * 0.35}px + ${bowOffset}px);
-      left: 50%;
-      transform: translateX(-50%);
-      width: ${bowSize}px;
-      height: ${bowSize}px;
-      background-image: url('${bowImage}');
-      background-size: contain;
-      background-repeat: no-repeat;
-      background-position: center;
-      pointer-events: none;
-      z-index: 10;
-      filter: drop-shadow(0 ${bowShadow}px ${bowShadowSpread}px rgba(0, 0, 0, 0.5));
-    }
-    
-    
-    /* Holiday Design Panel Styles */
-    #holidayDesignPanel {
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      width: 280px;
-      background: linear-gradient(135deg, rgba(30,30,30,0.98) 0%, rgba(20,20,20,0.98) 100%);
-      border: 1px solid rgba(212, 175, 55, 0.5);
-      border-radius: 12px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 20px rgba(212, 175, 55, 0.2);
-      z-index: 10000;
-      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      overflow: hidden;
-    }
-    
-    .holiday-panel-header {
-      background: linear-gradient(90deg, #8B1A1A 0%, #6B0F0F 100%);
-      color: white;
-      padding: 12px 16px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-weight: 600;
-      font-size: 14px;
-    }
-    
-    .holiday-panel-content {
-      padding: 16px;
-    }
-    
-    .holiday-control {
-      margin-bottom: 16px;
-    }
-    
-    .holiday-control:last-child {
-      margin-bottom: 0;
-    }
-    
-    .holiday-control label {
-      display: block;
-      color: #ccc;
-      font-size: 12px;
-      margin-bottom: 6px;
-    }
-    
-    .holiday-control label span {
-      color: #D4AF37;
-      font-weight: 600;
-    }
-    
-    .holiday-control input[type="range"] {
-      width: 100%;
-      height: 6px;
-      border-radius: 3px;
-      background: #333;
-      outline: none;
-      -webkit-appearance: none;
-    }
-    
-    .holiday-control input[type="range"]::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 16px;
-      height: 16px;
-      border-radius: 50%;
-      background: linear-gradient(135deg, #D4AF37 0%, #B8960C 100%);
-      cursor: pointer;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-    }
-    
-    .holiday-control select {
-      width: 100%;
-      padding: 8px 12px;
-      background: #333;
-      border: 1px solid #555;
-      border-radius: 6px;
-      color: #fff;
-      font-size: 13px;
-      cursor: pointer;
-    }
-    
-    .holiday-control select:focus {
-      outline: none;
-      border-color: #D4AF37;
-    }
-    
-    .holiday-section {
-      margin-bottom: 20px;
-      padding-bottom: 16px;
-      border-bottom: 1px solid rgba(255,255,255,0.1);
-    }
-    
-    .holiday-section:last-child {
-      margin-bottom: 0;
-      padding-bottom: 0;
-      border-bottom: none;
-    }
-    
-    .holiday-section-title {
-      color: #D4AF37;
-      font-size: 13px;
-      font-weight: 600;
-      margin-bottom: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    
-    .toggle-switch-mini {
-      position: relative;
-      display: inline-block;
-      width: 40px;
-      height: 22px;
-    }
-    
-    .toggle-switch-mini input {
-      opacity: 0;
-      width: 0;
-      height: 0;
-    }
-    
-    .toggle-slider-mini {
-      position: absolute;
-      cursor: pointer;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background-color: #333;
-      transition: .3s;
-      border-radius: 22px;
-    }
-    
-    .toggle-slider-mini:before {
-      position: absolute;
-      content: "";
-      height: 16px;
-      width: 16px;
-      left: 3px;
-      bottom: 3px;
-      background-color: white;
-      transition: .3s;
-      border-radius: 50%;
-    }
-    
-    .toggle-switch-mini input:checked + .toggle-slider-mini {
-      background: linear-gradient(135deg, #D4AF37 0%, #B8960C 100%);
-    }
-    
-    .toggle-switch-mini input:checked + .toggle-slider-mini:before {
-      transform: translateX(18px);
-    }
+  // Create confirmation dialog (same pattern as hard reset modal)
+  const modalHTML = `
+    <div class="modal-backdrop active" id="soft-reset-modal" onclick="if(event.target === this) closeSoftResetDialog()">
+      <div class="modal-content hard-reset-dialog">
+        <h3>Reset Timeline?</h3>
+        
+        <p>This will reset the timeline back to ${formattedDate}.</p>
+        
+        <div class="modal-actions">
+          <button class="btn btn-secondary" onclick="closeSoftResetDialog()">Cancel</button>
+          <button class="btn restore" onclick="executeSoftReset('${commitHash}')">Reset Timeline</button>
+        </div>
+      </div>
+    </div>
   `;
+
+  document.body.insertAdjacentHTML('beforeend', modalHTML);
+  console.log('[confirmSoftReset] Dialog created');
+}
+
+function closeSoftResetDialog() {
+  const modal = document.getElementById('soft-reset-modal');
+  if (modal) {
+    modal.remove();
+  }
+}
+
+async function executeSoftReset(commitHash) {
+  closeSoftResetDialog();
+
+  console.log('[soft-reset] Starting soft reset to:', commitHash);
+  showNotification('Resetting timeline...', 'info', 2000);
+
+  try {
+    const response = await fetch(`${API}/git/soft-reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ commitHash })
+    });
+
+    const data = await response.json();
+    console.log('[soft-reset] Server response:', data);
+
+    if (data.success) {
+      showNotification('Timeline reset!', 'success', 4000);
+      // Refresh the timeline
+      await loadTimeline();
+    } else {
+      showNotification(`Reset failed: ${data.error}`, 'error', 5000);
+    }
+  } catch (error) {
+    console.error('[soft-reset] Error:', error);
+    showNotification(`Reset error: ${error.message}`, 'error', 5000);
+  }
 }

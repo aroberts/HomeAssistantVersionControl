@@ -89,13 +89,13 @@ body {
   color: var(--text-primary);
   line-height: 1.6;
   transition: background-color 0.3s ease, color 0.3s ease;
-  padding: 32px 24px;
+  padding: clamp(16px, 2vh, 32px) clamp(12px, 2vw, 24px);
   height: 100vh;
   overflow: hidden;
 }
 
 .container {
-  max-width: 1400px;
+  max-width: clamp(900px, 92vw, 1800px);
   margin: 0 auto;
   padding: 0 12px;
   display: flex;
@@ -148,11 +148,10 @@ body {
 
 /* === Header === */
 .header {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
-  padding: 28px 32px;
-  margin-bottom: 32px;
+  background: transparent;
+  border: none;
+  padding: clamp(16px, 2vh, 28px) clamp(20px, 3vw, 32px) clamp(8px, 1vh, 14px);
+  margin-bottom: clamp(17px, 1vh, 25px);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -164,7 +163,7 @@ body {
 }
 
 .title {
-  font-size: 28px;
+  font-size: clamp(22px, 3vw, 28px);
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--text-primary);
@@ -173,7 +172,7 @@ body {
 
 .subtitle {
   color: var(--text-secondary);
-  font-size: 15px;
+  font-size: clamp(12px, 1.5vw, 15px);
   font-weight: 400;
   margin-top: -2px;
 }
@@ -182,7 +181,7 @@ body {
 .tabs {
   display: flex;
   gap: 8px;
-  margin-bottom: 24px;
+  margin-bottom: clamp(6px, 1vh, 14px);
   padding: 6px;
   background: var(--bg-secondary);
   border-radius: var(--radius-md);
@@ -221,7 +220,7 @@ body {
   gap: 24px;
   max-width: 100%;
   box-sizing: border-box;
-  margin-top: 16px;
+  margin-top: 11px;
   padding: 0;
   flex: 1;
   min-height: 0;
@@ -263,9 +262,9 @@ body {
 }
 
 .panel-header {
-  padding: 24px 24px 20px;
+  padding: clamp(16px, 2vh, 24px) 24px clamp(14px, 1.5vh, 20px);
   border-bottom: 1px solid var(--border-subtle);
-  min-height: 85px;
+  min-height: clamp(60px, 8vh, 85px);
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -486,6 +485,9 @@ body {
   color: var(--text-tertiary);
   font-size: 13px;
   font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* === Files === */
@@ -560,6 +562,29 @@ body {
   transform: translateX(2px);
 }
 
+/* === Deleted Items === */
+.file.deleted {
+  opacity: 0.85;
+}
+
+.file.deleted:hover {
+  opacity: 1;
+}
+
+.file.deleted .file-name {
+  color: var(--text-secondary);
+}
+
+.file.deleted .deleted-icon {
+  opacity: 0.7;
+}
+
+.file-last-seen {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-style: italic;
+  margin-top: 2px;
+}
 
 /* === Breadcrumb === */
 .breadcrumb {
@@ -878,8 +903,7 @@ input:checked+.toggle-slider:before {
 }
 
 .modal-header {
-  padding: 24px 28px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 24px 28px 8px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -915,7 +939,7 @@ input:checked+.toggle-slider:before {
 }
 
 .modal-content {
-  padding: 24px 28px;
+  padding: 16px 28px 24px;
   overflow-y: auto;
   flex: 1;
 }
@@ -1009,7 +1033,7 @@ input:checked+.toggle-slider:before {
 .line-number {
   color: var(--text-tertiary);
   font-size: 11px;
-  width: 28px;
+  width: clamp(20px, 3vw, 28px);
   text-align: right;
   user-select: none;
   flex-shrink: 0;
@@ -1230,9 +1254,9 @@ input:checked+.toggle-slider:before {
   }
 
   .diff-line .line-num {
-    width: 30px;
-    padding-right: 8px;
-    margin-right: 8px;
+    width: clamp(20px, 4vw, 30px);
+    padding-right: 6px;
+    margin-right: 6px;
   }
 }
 
@@ -1567,7 +1591,7 @@ body.dark-mode .color-circle.selected {
 }
 
 .diff-viewer-unified .diff-line-marker {
-  width: 24px;
+  width: clamp(12px, 2vw, 24px);
   flex-shrink: 0;
   text-align: center;
   color: var(--text-tertiary);
@@ -1578,11 +1602,11 @@ body.dark-mode .color-circle.selected {
 }
 
 .diff-viewer-unified .diff-line-num {
-  width: 70px;
+  width: clamp(28px, 5vw, 70px);
   flex-shrink: 0;
   text-align: right;
-  padding-right: 12px;
-  padding-left: 8px;
+  padding-right: clamp(6px, 1vw, 12px);
+  padding-left: clamp(4px, 0.8vw, 8px);
   color: var(--text-tertiary);
   user-select: none;
   border-right: 1px solid var(--border-subtle);
@@ -1709,7 +1733,7 @@ body.dark-mode .diff-expand-separator {
 }
 
 .diff-line-marker {
-  width: 24px;
+  width: clamp(12px, 2vw, 24px);
   flex-shrink: 0;
   text-align: center;
   color: var(--text-tertiary);
@@ -1719,10 +1743,10 @@ body.dark-mode .diff-expand-separator {
 }
 
 .diff-line-num {
-  width: 50px;
+  width: clamp(20px, 3.5vw, 50px);
   flex-shrink: 0;
   text-align: right;
-  padding-right: 8px;
+  padding-right: clamp(4px, 1vw, 8px);
   color: var(--text-tertiary);
   user-select: none;
   border-right: 1px solid var(--border-subtle);
@@ -2191,6 +2215,7 @@ input[type=number]::-webkit-outer-spin-button {
 
 input[type=number] {
   -moz-appearance: textfield;
+  appearance: textfield;
 }
 
 .spinner-btn:hover svg {
@@ -2388,7 +2413,7 @@ input[type=number] {
   display: none;
 }
 
-body.holiday-mode .snow-container {
+body.winter-mode .snow-container {
   display: block;
 }
 
@@ -2499,84 +2524,7 @@ body.holiday-mode .snow-container {
   }
 }
 
-/* === HOLIDAY HEADER - THE GIFT === */
-body.holiday-mode .header {
-  background:
-    /* Gold ribbon horizontal */
-    linear-gradient(to bottom,
-      transparent calc(50% - 8px),
-      #D4AF37 calc(50% - 8px),
-      #F4CF47 calc(50% - 4px),
-      #D4AF37 50%,
-      #B8960C 50%,
-      #D4AF37 calc(50% + 4px),
-      #F4CF47 calc(50% + 8px),
-      transparent calc(50% + 8px)),
-    /* Plaid pattern - horizontal lines */
-    repeating-linear-gradient(0deg,
-      transparent 0px,
-      transparent 20px,
-      rgba(15, 79, 15, 0.4) 20px,
-      rgba(15, 79, 15, 0.4) 24px,
-      transparent 24px,
-      transparent 40px,
-      rgba(212, 175, 55, 0.3) 40px,
-      rgba(212, 175, 55, 0.3) 42px,
-      transparent 42px),
-    /* Plaid pattern - vertical lines */
-    repeating-linear-gradient(90deg,
-      transparent 0px,
-      transparent 20px,
-      rgba(15, 79, 15, 0.4) 20px,
-      rgba(15, 79, 15, 0.4) 24px,
-      transparent 24px,
-      transparent 40px,
-      rgba(212, 175, 55, 0.3) 40px,
-      rgba(212, 175, 55, 0.3) 42px,
-      transparent 42px),
-    /* Base - rich burgundy red */
-    linear-gradient(135deg, #8B1A1A 0%, #A52A2A 25%, #8B1A1A 50%, #6B0F0F 75%, #8B1A1A 100%);
-  border: 2px solid #D4AF37;
-  position: relative;
-  overflow: visible;
-}
 
-/* Vertical ribbon */
-body.holiday-mode .header::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 16px;
-  height: 100%;
-  background: linear-gradient(to right,
-      #D4AF37 0%,
-      #F4CF47 25%,
-      #D4AF37 50%,
-      #B8960C 75%,
-      #D4AF37 100%);
-  z-index: 1;
-}
-
-/* Make header title readable over plaid */
-body.holiday-mode .header .title,
-body.holiday-mode .header div[style*="color: var(--text-tertiary)"] {
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
-  color: #ffffff !important;
-}
-
-body.holiday-mode .header .btn-subtle {
-  background: rgba(255, 255, 255, 0.15);
-  border-color: rgba(255, 255, 255, 0.3);
-  color: #ffffff;
-  backdrop-filter: blur(4px);
-}
-
-body.holiday-mode .header .btn-subtle:hover {
-  background: rgba(255, 255, 255, 0.25);
-  border-color: rgba(255, 255, 255, 0.5);
-}
 
 /* Hide snow from settings modal */
 .modal-overlay .snow-container,
@@ -2587,4 +2535,68 @@ body.holiday-mode .header .btn-subtle:hover {
 /* Ensure modals appear above snow */
 .modal-overlay {
   z-index: 1000;
+}
+
+/* === Context Menu === */
+.context-menu {
+  position: absolute;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 2000;
+  padding: 6px;
+  animation: context-menu-appear 0.15s ease-out;
+}
+
+@keyframes context-menu-appear {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  color: var(--text-primary);
+  transition: all 0.15s ease;
+}
+
+.context-menu-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.context-menu-icon {
+  font-size: 16px;
+  opacity: 0.9;
+}
+
+.context-menu-text {
+  font-weight: 500;
+}
+
+.context-menu-separator {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 4px 0;
+}
+
+/* Soft Reset Modal */
+.soft-reset-modal {
+  max-width: 420px;
+}
+
+.soft-reset-modal .modal-body p {
+  line-height: 1.5;
 }

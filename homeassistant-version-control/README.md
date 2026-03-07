@@ -4,11 +4,20 @@
 
 Home Assistant Version Control provides complete version history for your setup. It automatically tracks every change to your YAML configuration files using a robust local Git backend. Browse your history, visualize diffs, and restore individual files or your entire configuration to any previous state with a single click.
 
-![Screenshot 1](https://raw.githubusercontent.com/DiggingForDinos/HomeAssistantVersionControl/main/images/screenshots/1.png)
-![Screenshot 2](https://raw.githubusercontent.com/DiggingForDinos/HomeAssistantVersionControl/main/images/screenshots/2.1.png)
-![Screenshot 3](https://raw.githubusercontent.com/DiggingForDinos/HomeAssistantVersionControl/main/images/screenshots/3.png)
-![Screenshot 4](https://raw.githubusercontent.com/DiggingForDinos/HomeAssistantVersionControl/main/images/screenshots/4.png)
-![Screenshot 5](https://raw.githubusercontent.com/DiggingForDinos/HomeAssistantVersionControl/main/images/screenshots/5.png)
+
+##  What's New!
+
+*   **Cloud Backup:** Push your configuration to a private GitHub or Gitea repository. Choose to sync manually, daily, or automatically after every change.
+*   **Track More than Just YAML:** Now you can select any file format to track and backup! Configure extensions like .sh, .py, .json directly in the add-on's Configuration tab.
+*   **Recover Deleted Items:** View and restore files, automations, and scripts that have been deleted. Look for the "Deleted" option in the sort menu.
+*   **Progressive History Loading:** Versions now load faster, displaying results as they're found.
+*   **Quick Style Toggle:** Tap the header bar of any file diff to instantly cycle through different visual styles (High Contrast, GitHub Classic, Neon, etc.).
+
+
+![Screenshot 1](https://github.com/saihgupr/HomeAssistantVersionControl/raw/develop/images/screenshots/1.2.png)
+![Screenshot 2](https://github.com/saihgupr/HomeAssistantVersionControl/raw/develop/images/screenshots/2.2.png)
+![Screenshot 3](https://github.com/saihgupr/HomeAssistantVersionControl/raw/develop/images/screenshots/3.2.png)
+![Screenshot 5](https://github.com/saihgupr/HomeAssistantVersionControl/raw/develop/images/screenshots/5.2.png)
 
 ##  Key Features
 
@@ -38,7 +47,12 @@ Home Assistant Version Control provides complete version history for your setup.
     * **Current (Default):** Compare against your **Current File** on disk to see how far you've deviated since that backup.
     * **Changes:** Compare against the **Previous Version** to see exactly what changed in that specific backup.
 
----
+### Restore Actions
+* **Restore Single File:** Click the "Restore" button on any file in the timeline.
+* **Restore All Files:** Long-press (2 seconds) the "Restore" button on a timeline entry to revert **all tracked files** to that exact moment.
+* **Timeline Context Menu:** Right-click on any version in the timeline to access:
+  * **Reset Timeline Here:** Remove all versions newer than the selected point (keeps your files unchanged, only cleans up timeline history).
+  * **Restore All Files Here:** Revert all tracked files back to their state at the selected version.
 
 ## Installation
 
@@ -53,14 +67,14 @@ There are two ways to install Home Assistant Version Control: as a Home Assistan
 1.  **Add Repository:**
     Click the button below to add the repository to your Home Assistant instance:
 
-    [![Open your Home Assistant instance and show the add-on store](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https://github.com/DiggingForDinos/ha-addons)
+    [![Open your Home Assistant instance and show the add-on store](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https://github.com/saihgupr/ha-addons)
 
     **Or manually add it:**
     - Navigate to **Settings** → **Add-ons** → **Add-on Store**
     - Click the three dots (⋮) in the top right corner and select **Repositories**
     - Add the repository URL:
       ```
-      https://github.com/DiggingForDinos/ha-addons
+      https://github.com/saihgupr/ha-addons
       ```
 2.  **Install the Add-on:**
     The "Home Assistant Version Control" add-on will now appear in the store. Click on it and then click "Install".
@@ -77,7 +91,7 @@ For Docker users who aren't using the Home Assistant add-on, you have three depl
 
 1. Download the compose.yaml file:
    ```bash
-   curl -o compose.yaml https://raw.githubusercontent.com/DiggingForDinos/HomeAssistantVersionControl/main/compose.yaml
+   curl -o compose.yaml https://github.com/saihgupr/HomeAssistantVersionControl/raw/develop/compose.yaml
    ```
 
 2. Edit the file to set your paths and timezone:
@@ -104,7 +118,7 @@ docker run -d \
   -e SUPERVISOR_TOKEN=your_long_lived_access_token_here \
   -e HA_URL=http://homeassistant.local:8123 \
   --name home-assistant-version-control \
-  ghcr.io/diggingfordinos/homeassistantversioncontrol:latest
+  ghcr.io/saihgupr/homeassistantversioncontrol:latest
 ```
 
 Replace `/path/to/your/config` with the actual path to your Home Assistant configuration directory.
@@ -112,7 +126,7 @@ Replace `/path/to/your/config` with the actual path to your Home Assistant confi
 **Option C: Build locally:**
 
 ```bash
-git clone https://github.com/DiggingForDinos/HomeAssistantVersionControl.git
+git clone https://github.com/saihgupr/HomeAssistantVersionControl.git
 cd HomeAssistantVersionControl/homeassistant-version-control
 docker build --build-arg BUILD_FROM=alpine:latest -t home-assistant-version-control .
 
@@ -131,13 +145,106 @@ docker run -d \
 
 Access the interface at `http://localhost:54001`.
 
----
+## Configuration
 
-### Restore Actions
-* **Restore Single File:** Click the "Restore" button on any file in the timeline.
-* **Restore All Files:** Long-press (2 seconds) the "Restore" button on a timeline entry to revert **all tracked files** to that exact moment.
+### Runtime Settings
 
----
+The application can be configured through the web UI Settings page or via environment variables for containerized deployments.
+
+#### Available Settings
+
+| Setting | Description | Default |
+| :--- | :--- | :--- |
+| **Debounce Time** | Time to wait after detecting changes before creating a commit | `5 seconds` |
+| **History Retention** | Automatically merge old commits to keep history clean | `Disabled` |
+| **Retention Type** | Keep history based on time or number of versions | `time` |
+| **Retention Value** | How much history to keep (number of days/hours/weeks/months or versions) | `90` |
+| **Retention Unit** | Time unit for retention (hours, days, weeks, months) | `days` |
+
+#### Environment Variable Configuration
+
+For containerized deployments (especially when not persisting the `/data` directory), you can configure runtime settings using environment variables. This is particularly useful for:
+- Docker/Podman deployments without persistent data volumes
+- Infrastructure-as-code configurations
+- Automated deployments with predefined settings
+
+**Precedence order (per-setting):**
+1. **Settings file** (`/data/runtime-settings.json`) - highest priority
+2. **Environment variables** - middle priority
+3. **Default values** - fallback
+
+#### Environment Variable Reference
+
+| Environment Variable | Setting | Type | Valid Values | Default |
+| :--- | :--- | :--- | :--- | :--- |
+| `DEBOUNCE_TIME` | Debounce Time | Number | ≥ 0 | `5` |
+| `DEBOUNCE_TIME_UNIT` | Debounce Time Unit | String | `seconds`, `minutes`, `hours`, `days` | `seconds` |
+| `HISTORY_RETENTION` | History Retention | Boolean | `true`, `false`, `yes`, `no`, `1`, `0` | `false` |
+| `RETENTION_TYPE` | Retention Type | String | `time`, `versions` | `time` |
+| `RETENTION_VALUE` | Retention Value | Number | ≥ 1 | `90` |
+| `RETENTION_UNIT` | Retention Unit | String | `hours`, `days`, `weeks`, `months` | `days` |
+
+**Notes:**
+- Boolean values are case-insensitive and accept: `true`/`false`, `yes`/`no`, `1`/`0`
+- String values (units, types) are case-insensitive: `SECONDS` and `seconds` are equivalent
+- Invalid values trigger warnings in logs and fall back to defaults
+- Empty values are ignored
+
+#### Docker Examples
+
+**Docker Compose with environment variables:**
+```yaml
+version: '3.8'
+services:
+  havc:
+    image: ghcr.io/saihgupr/homeassistantversioncontrol:latest
+    ports:
+      - "54001:54001"
+    volumes:
+      - /path/to/your/config:/config
+    environment:
+      - TZ=America/New_York
+      - DEBOUNCE_TIME=10
+      - DEBOUNCE_TIME_UNIT=minutes
+      - HISTORY_RETENTION=true
+      - RETENTION_TYPE=time
+      - RETENTION_VALUE=30
+      - RETENTION_UNIT=days
+```
+
+**Docker Run with environment variables:**
+```bash
+docker run -d \
+  -p 54001:54001 \
+  -v /path/to/your/config:/config \
+  -e TZ=America/New_York \
+  -e DEBOUNCE_TIME=10 \
+  -e DEBOUNCE_TIME_UNIT=minutes \
+  -e HISTORY_RETENTION=true \
+  -e RETENTION_TYPE=time \
+  -e RETENTION_VALUE=30 \
+  -e RETENTION_UNIT=days \
+  --name home-assistant-version-control \
+  ghcr.io/saihgupr/homeassistantversioncontrol:latest
+```
+
+**Validation and Logging:**
+
+When the container starts, you'll see detailed logging showing where each setting value came from:
+```
+[init] Runtime settings loaded:
+[init]   debounceTime: 10 (env: DEBOUNCE_TIME)
+[init]   debounceTimeUnit: 'minutes' (env: DEBOUNCE_TIME_UNIT)
+[init]   historyRetention: true (env: HISTORY_RETENTION)
+[init]   retentionType: 'time' (default)
+[init]   retentionValue: 30 (env: RETENTION_VALUE)
+[init]   retentionUnit: 'days' (default)
+```
+
+Invalid values will trigger warnings:
+```
+[init] Warning: Invalid DEBOUNCE_TIME='abc', Expected integer, got: 'abc'. Using default: 5
+```
 
 ## How It Works
 
@@ -160,11 +267,27 @@ The add-on automatically tracks configuration files while ignoring system files.
 | `esphome/*.yaml` | Temporary files |
 | All other `.yaml` and `.yml` files | Files in `.gitignore` |
 
-> [!TIP]
-> **Excluding Files (e.g., secrets.yaml):**
-> You can prevent specific files from being tracked by adding them to a `.gitignore` file in your `/config` directory. Just list the filenames (one per line) that you want to hide, and the add-on will automatically exclude them from version control.
+> [!CAUTION]
+> **Secrets Management & Cloud Backup:**
+> By default, `secrets.yaml` is **excluded** from version control to protect sensitive information like passwords and API keys. If you use the Cloud Backup feature and choose to include `secrets.yaml`, ensure your remote repository is **private** and understand that secrets will be stored in Git history. Consider using Home Assistant's built-in secrets management or environment variables for sensitive data instead.
 
----
+> [!TIP]
+> **Excluding Files:**
+> You can prevent specific files from being tracked by adding them to a `.gitignore` file in your `/config` directory. Just list the filenames (one per line) that you want to exclude, and the add-on will automatically ignore them from version control.
+
+## Cloud Sync (GitHub/Gitea)
+
+You can automatically sync your configuration to a private remote repository. This is highly recommended for off-site backups.
+
+### Custom Repository Setup (Gitea/Self-Hosted)
+
+If you are using a custom Git server like Gitea, follow these steps to ensure a smooth sync (note: this is **not** required for standard GitHub setups):
+
+1.  **Create a Private Repository:** Log in to your Git server and manually create a **private** repository named `VersionControlBackup` before attempting to sync from the UI.
+2.  **Authentication URL:** Use the following URL format in the Cloud Sync settings, substituting your token, IP/domain, and username:
+    ```
+    http://YOUR_API_TOKEN@YOUR_SERVER_IP:PORT/YOUR_USERNAME/VersionControlBackup.git
+    ```
 
 ## API
 
@@ -244,10 +367,14 @@ curl -X POST http://homeassistant.local:54001/api/retention/cleanup \
   -d '{"hours": 24}'
 ```
 
----
+## Contributing
 
-##  Support
+Found a bug? Feel free to [open an issue](https://github.com/saihgupr/HomeAssistantVersionControl/issues).
 
-Found a bug or have a feature request? Please [submit an issue on GitHub](https://github.com/DiggingForDinos/HomeAssistantVersionControl/issues).
+Want to contribute? Check out [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-**If you find this add-on helpful, please ⭐ star the repository!**
+Want the latest features? The [develop branch](https://github.com/saihgupr/HomeAssistantVersionControl/tree/develop) includes the most recent updates and features.
+
+## Support
+
+If you find this project useful, please consider giving it a star, or [buy me a coffee](https://ko-fi.com/saihgupr) if you'd like!

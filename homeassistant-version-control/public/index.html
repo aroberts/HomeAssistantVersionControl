@@ -6,7 +6,7 @@
   <title>Home Assistant Version Control</title>
   <script src="js/diff.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
-  <link rel="stylesheet" href="css/style.css?v=${new Date().getTime()}">
+  <link rel="stylesheet" href="css/style.css?v=1734109500">
   <link rel="icon" type="image/x-icon" href="images/favicon.ico">
 </head>
 
@@ -15,8 +15,9 @@
   <div id="snowContainer" class="snow-container"></div>
   <div class="container">
     <div class="header">
-      <div style="display: flex; align-items: center; gap: 14px;">
-        <img src="images/icon.png" alt="Logo" style="width: 48px; height: 48px; border-radius: 6px;">
+      <div style="display: flex; align-items: center; gap: clamp(10px, 1.5vw, 14px);">
+        <img src="images/icon.png" alt="Logo"
+          style="width: clamp(36px, 5vw, 48px); height: clamp(36px, 5vw, 48px); border-radius: 6px;">
         <div style="margin-top: -4px;">
           <div class="title" data-i18n="app.title">Home Assistant Version Control</div>
           <div style="color: var(--text-tertiary); font-size: 14px; margin-top: -12px;" data-i18n="app.subtitle">Browse
@@ -48,6 +49,7 @@
                 <option value="name_asc" data-i18n="sort.name_asc">Name (A-Z)</option>
                 <option value="name_desc" data-i18n="sort.name_desc">Name (Z-A)</option>
                 <option value="recently_modified" data-i18n="sort.recently_modified">Recently Modified</option>
+                <option value="deleted" data-i18n="sort.deleted">Deleted</option>
               </select>
             </div>
           </div>
@@ -143,7 +145,7 @@
     <div class="modal settings-modal" style="max-width: 430px;">
       <div class="modal-header">
         <div class="modal-title" data-i18n="app.settings">Settings</div>
-        <button class="modal-close" onclick="closeSettings()">&times;</button>
+
       </div>
       <div class="modal-content">
         <div class="settings-section">
@@ -159,7 +161,7 @@
               </label>
               <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
                 <div class="custom-number-input-wrapper" style="position: relative;">
-                  <input type="number" id="debounceTime" min="0" value="1" style="
+                  <input type="number" id="debounceTime" min="0" value="3" style="
                     width: 100%;
                     padding: 10px 32px 10px 12px;
                     background: var(--bg-tertiary);
@@ -218,7 +220,7 @@
                   data-i18n="settings.history_retention">History
                   Retention</span>
                 <div class="toggle-switch">
-                  <input type="checkbox" id="historyRetention" style="display: none;" checked>
+                  <input type="checkbox" id="historyRetention" style="display: none;">
                   <label for="historyRetention" class="toggle-slider" onclick="handleRetentionToggle()"></label>
                 </div>
               </label>
@@ -272,12 +274,13 @@
                     <option value="months" data-i18n="units.months">Months</option>
                   </select>
                 </div>
+                <p style="color: var(--text-secondary); font-size: 12px; margin-top: 6px; margin-left: 2px;"
+                  data-i18n="settings.history_retention_desc">
+                  Merge versions older than the specified time period
+                </p>
               </div>
-              <p style="color: var(--text-secondary); font-size: 12px; margin-top: 6px; margin-left: 2px;"
-                data-i18n="settings.history_retention_desc">
-                Merge versions older than the specified time period
-              </p>
             </div>
+
           </div>
 
           <!-- Group 3: Diff Viewer -->
@@ -355,6 +358,268 @@
             </div>
           </div>
 
+          <!-- Group: Cloud Backup -->
+          <div class="settings-group">
+            <div class="settings-group-title" data-i18n="settings.group_cloud_backup">Cloud Backup</div>
+
+            <div class="setting-item" style="margin-bottom: 20px;">
+              <label style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
+                <span style="color: var(--text-primary); font-size: 14px;"
+                  data-i18n="settings.cloud_sync_enabled">Enable Cloud Sync</span>
+                <div class="toggle-switch">
+                  <input type="checkbox" id="cloudSyncEnabled" style="display: none;"
+                    onchange="handleCloudSyncToggle()">
+                  <label for="cloudSyncEnabled" class="toggle-slider"></label>
+                </div>
+              </label>
+            </div>
+
+            <div id="cloudSyncOptions" style="display: none;">
+              <!-- Cloud Provider Selector -->
+              <div class="setting-item"
+                style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+                <label style="margin-bottom: 0;">
+                  <span style="color: var(--text-primary); font-size: 14px;" data-i18n="settings.cloud_provider">Cloud
+                    Provider</span>
+                </label>
+                <div class="segmented-control">
+                  <input type="radio" name="cloudProvider" id="cloudProviderGithub" value="github" checked
+                    onchange="handleCloudProviderChange()">
+                  <label for="cloudProviderGithub">GitHub</label>
+                  <input type="radio" name="cloudProvider" id="cloudProviderCustom" value="custom"
+                    onchange="handleCloudProviderChange()">
+                  <label for="cloudProviderCustom" data-i18n="settings.cloud_provider_custom">Custom</label>
+                  <div class="segmented-control-slider"></div>
+                </div>
+              </div>
+
+              <!-- Manual Remote URL (Custom Mode) -->
+              <div id="customConfigSection" style="margin-bottom: 16px; display: none;">
+                <!-- Not Connected State -->
+                <div id="customNotConnected">
+                  <label style="display: block; margin-bottom: 8px;">
+                    <span style="color: var(--text-primary); font-size: 14px;"
+                      data-i18n="settings.cloud_remote_url">Remote URL</span>
+                  </label>
+                  <input type="text" id="cloudRemoteUrl" placeholder="https://git.example.com/user/project.git" style="
+                    width: 100%;
+                    padding: 10px 12px;
+                    background: var(--bg-tertiary);
+                    border: 1px solid var(--border-subtle);
+                    border-radius: var(--radius-md);
+                    color: var(--text-primary);
+                    font-size: 14px;
+                    box-sizing: border-box;
+                    margin-bottom: 8px;
+                  ">
+                  <button class="btn" onclick="testCustomConnection()"
+                    style="width: 100%; background: var(--bg-tertiary); border: 1px solid var(--border-subtle); display: flex; align-items: center; justify-content: center; gap: 8px;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="12" cy="12" r="4"></circle>
+                      <line x1="1.05" y1="12" x2="7" y2="12"></line>
+                      <line x1="17.01" y1="12" x2="22.96" y2="12"></line>
+                    </svg>
+                    <span>Test Connection</span>
+                  </button>
+                  <p style="color: var(--text-secondary); font-size: 12px; margin-top: 6px; margin-left: 2px;"
+                    data-i18n="settings.cloud_remote_url_desc">
+                    Supports HTTPS URLs (GitLab, Gitea, Bitbucket, etc.)
+                  </p>
+                </div>
+
+                <!-- Connected State -->
+                <label id="customAccountLabel" style="display: none; margin-bottom: 8px;">
+                  <span style="color: var(--text-primary); font-size: 14px;"
+                    data-i18n="settings.cloud_custom_account">Custom Account</span>
+                </label>
+                <div id="customConnected"
+                  style="display: none; padding: 8px 12px; background: var(--bg-tertiary); border-radius: var(--radius-md);">
+                  <div style="display: flex; align-items: center; gap: 10px;">
+                    <img id="customRepoAvatar" src="" alt="Avatar"
+                      style="width: 24px; height: 24px; border-radius: 50%; display: none; object-fit: cover;">
+                    <svg id="customRepoIcon" xmlns="http://www.w3.org/2000/svg" width="24" height="24"
+                      viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" stroke-width="2"
+                      stroke-linecap="round" stroke-linejoin="round">
+                      <!-- Gitea-style tea cup icon -->
+                      <path d="M17 8h1a4 4 0 1 1 0 8h-1"></path>
+                      <path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V8z"></path>
+                      <line x1="6" y1="2" x2="6" y2="4"></line>
+                      <line x1="10" y1="2" x2="10" y2="4"></line>
+                      <line x1="14" y1="2" x2="14" y2="4"></line>
+                    </svg>
+                    <a id="customRepoLink" href="#" target="_blank"
+                      style="color: var(--text-primary); font-size: 14px; font-weight: 500; text-decoration: none; flex: 1;"
+                      onmouseover="this.style.color='var(--accent-blue)'; this.style.textDecoration='underline'"
+                      onmouseout="this.style.color='var(--text-primary)'; this.style.textDecoration='none'">
+                    </a>
+                    <div style="color: var(--success); font-size: 12px; white-space: nowrap;">✓ Connected</div>
+                    <button class="btn" onclick="disconnectCustom()"
+                      style="background: var(--danger); padding: 2px 8px; font-size: 11px;">Disconnect</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- GitHub Configuration Section -->
+              <div id="githubConfigSection">
+                <!-- Repository Name -->
+                <div id="repoNameSection" style="margin-bottom: 16px;">
+                  <label style="display: block; margin-bottom: 8px;">
+                    <span style="color: var(--text-primary); font-size: 14px;"
+                      data-i18n="settings.cloud_repo_name">Repository Name</span>
+                  </label>
+                  <input type="text" id="cloudRepoName" value="VersionControlBackup" placeholder="VersionControlBackup"
+                    style="
+                    width: 100%;
+                    padding: 10px 12px;
+                    background: var(--bg-tertiary);
+                    border: 1px solid var(--border-subtle);
+                    border-radius: var(--radius-md);
+                    color: var(--text-primary);
+                    font-size: 14px;
+                    box-sizing: border-box;
+                  ">
+                  <p id="cloudRepoNameDesc"
+                    style="color: var(--text-secondary); font-size: 12px; margin-top: 6px; margin-left: 2px;"
+                    data-i18n="settings.cloud_repo_name_desc">
+                    A private repository will be created automatically
+                  </p>
+                </div>
+
+                <!-- GitHub Connection -->
+                <div style="margin-bottom: 16px;">
+                  <label style="display: block; margin-bottom: 8px;">
+                    <span style="color: var(--text-primary); font-size: 14px;"
+                      data-i18n="settings.cloud_github_account">GitHub Account</span>
+                  </label>
+
+                  <!-- Not Connected State -->
+                  <div id="githubNotConnected">
+                    <button class="btn" onclick="connectGitHub()"
+                      style="width: 100%; background: var(--bg-tertiary); display: flex; align-items: center; justify-content: center; gap: 8px;">
+                      <svg height="20" width="20" viewBox="0 0 16 16" fill="white">
+                        <path
+                          d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+                      </svg>
+                      <span data-i18n="settings.cloud_connect_github">Connect GitHub</span>
+                    </button>
+                  </div>
+
+                  <!-- Connecting State (Device Flow) -->
+                  <div id="githubConnecting" style="display: none;">
+                    <div style="padding: 12px; background: var(--bg-tertiary); border-radius: var(--radius-md);">
+                      <div style="color: var(--text-primary); font-size: 14px; margin-bottom: 8px;">Enter this code at
+                        <a href="https://github.com/login/device" target="_blank"
+                          style="color: var(--primary);">github.com/login/device</a>
+                      </div>
+                      <div id="githubUserCodeWrapper" onclick="copyGitHubCode()"
+                        style="cursor: pointer; padding: 14px; background: rgb(32,32,32); border-radius: var(--radius-md); border: 1px solid var(--border-subtle); text-align: center; transition: filter 0.1s ease;"
+                        onmouseover="this.style.filter='brightness(1.1)'" onmouseout="this.style.filter='brightness(1)'"
+                        onmousedown="this.style.filter='brightness(0.9)'"
+                        onmouseup="this.style.filter='brightness(1.1)'">
+                        <div id="githubUserCode"
+                          style="font-size: 24px; font-weight: 600; letter-spacing: 3px; color: var(--text-primary); font-family: monospace;">
+                        </div>
+                        <div style="color: var(--text-tertiary); font-size: 11px; margin-top: 6px;">
+                          Tap to copy
+                        </div>
+                      </div>
+                    </div>
+                    <div
+                      style="display: flex; align-items: center; justify-content: space-between; margin-top: 8px; padding: 0 2px;">
+                      <span style="color: var(--text-secondary); font-size: 12px;"
+                        data-i18n="settings.cloud_github_waiting">Waiting for authorization...</span>
+                      <button onclick="cancelGitHubConnect()"
+                        style="padding: 8px 16px; background: var(--bg-tertiary); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); color: var(--text-primary); font-size: 13px; cursor: pointer; transition: filter 0.15s ease;"
+                        onmouseover="this.style.filter='brightness(1.2)'" onmouseout="this.style.filter='brightness(1)'"
+                        data-i18n="app.cancel">Cancel</button>
+                    </div>
+                  </div>
+
+                  <!-- Connected State -->
+                  <div id="githubConnected"
+                    style="display: none; padding: 8px 12px; background: var(--bg-tertiary); border-radius: var(--radius-md);">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                      <img id="githubAvatar" src="" alt="" style="width: 24px; height: 24px; border-radius: 50%;">
+                      <a id="githubRepoLink" href="#" target="_blank"
+                        style="color: var(--text-primary); font-size: 14px; font-weight: 500; text-decoration: none; flex: 1;"
+                        onmouseover="this.style.color='var(--accent-blue)'; this.style.textDecoration='underline'"
+                        onmouseout="this.style.color='var(--text-primary)'; this.style.textDecoration='none'">
+                      </a>
+                      <div style="color: var(--success); font-size: 12px; white-space: nowrap;">✓ Connected</div>
+                      <button class="btn" onclick="disconnectGitHub()"
+                        style="background: var(--danger); padding: 2px 8px; font-size: 11px;"
+                        data-i18n="settings.cloud_disconnect">Disconnect</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+
+              <div class="setting-item"
+                style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+                <label style="margin-bottom: 0;">
+                  <span style="color: var(--text-primary); font-size: 14px;"
+                    data-i18n="settings.cloud_push_frequency">Push Frequency</span>
+                </label>
+                <select id="cloudPushFrequency" style="
+                  width: auto;
+                  min-width: 180px;
+                  padding: 10px 12px;
+                  padding-right: 32px;
+                  background-color: var(--bg-tertiary);
+                  background-image: url(&quot;data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e&quot;);
+                  background-repeat: no-repeat;
+                  background-position: right 8px center;
+                  background-size: 16px;
+                  border: 1px solid var(--border-subtle);
+                  border-radius: var(--radius-md);
+                  color: var(--text-primary);
+                  font-size: 14px;
+                  -webkit-appearance: none;
+                  appearance: none;
+                  text-align: left;
+                  cursor: pointer;
+                ">
+                  <option value="manual" data-i18n="settings.cloud_push_manual">Manual Only</option>
+                  <option value="every_commit" data-i18n="settings.cloud_push_every_commit">After Every Commit</option>
+                  <option value="hourly" data-i18n="settings.cloud_push_hourly">Hourly</option>
+                  <option value="daily" data-i18n="settings.cloud_push_daily">Daily</option>
+                </select>
+              </div>
+
+              <div id="secretsToggleContainer" class="setting-item" style="margin-bottom: 16px;">
+                <label style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
+                  <span style="color: var(--text-primary); font-size: 14px;"
+                    data-i18n="settings.cloud_include_secrets">Include secrets.yaml</span>
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="cloudIncludeSecrets" style="display: none;">
+                    <label for="cloudIncludeSecrets" class="toggle-slider"></label>
+                  </div>
+                </label>
+              </div>
+
+              <!-- Push to Cloud - styled as inline setting item -->
+              <div class="setting-item" style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <span style="color: var(--text-primary); font-size: 14px;">Push to Cloud</span>
+                  <p id="cloudSyncStatus"
+                    style="color: var(--text-secondary); font-size: 12px; margin-top: 4px; margin-bottom: 0;">
+                    <span data-i18n="settings.cloud_last_push">Last push:</span>
+                    <span id="cloudLastPushTime">Never</span>
+                    <span id="cloudLastPushStatus"></span>
+                  </p>
+                </div>
+                <button onclick="pushToCloudNow()"
+                  style="padding: 8px 16px; background: var(--bg-tertiary); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); color: var(--text-primary); font-size: 13px; cursor: pointer; transition: filter 0.15s ease; white-space: nowrap;"
+                  onmouseover="this.style.filter='brightness(1.2)'" onmouseout="this.style.filter='brightness(1)'"
+                  data-i18n="settings.cloud_push_now">
+                  Push Now
+                </button>
+              </div>
+            </div>
+          </div>
+
           <!-- Group 3: Appearance -->
           <div class="settings-group">
             <div class="settings-group-title" data-i18n="settings.group_appearance">Appearance</div>
@@ -408,16 +673,15 @@
           </div>
 
           <!-- Holiday Mode at the very bottom -->
-          <div class="settings-group" style="display: none;">
-            <div class="setting-item" style="display: flex; justify-content: space-between; align-items: center;">
-              <div>
-                <span style="color: var(--text-primary); font-size: 14px;" data-i18n="settings.holiday_mode">Holiday
-                  Mode</span>
-              </div>
-              <div class="toggle-switch">
-                <input type="checkbox" id="holidayMode" style="display: none;">
-                <label for="holidayMode" class="toggle-slider" onclick="toggleHolidayMode()"></label>
-              </div>
+          <!-- Winter Mode - Minimal at bottom -->
+          <div class="setting-item" style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <span style="color: var(--text-primary); font-size: 14px;" data-i18n="settings.winter_mode">Winter
+                Mode</span>
+            </div>
+            <div class="toggle-switch">
+              <input type="checkbox" id="winterMode" style="display: none;">
+              <label for="winterMode" class="toggle-slider" onclick="toggleWinterMode()"></label>
             </div>
           </div>
         </div>
@@ -433,7 +697,7 @@
   </div>
 
 
-  <script src="app.js?v=1733338000"></script>
+  <script src="app.js?v=1734394700"></script>
 </body>
 
 </html>
