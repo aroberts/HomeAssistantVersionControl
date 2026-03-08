@@ -29,10 +29,12 @@ import { execSync } from 'child_process';
 import { safePath, isValidCommitHash, isAllowedOrigin } from './utils/validate.js';
 import {
   collectMetrics, pushTotal, pushDuration, lastPushTimestamp,
+  pullTotal, pullDuration, lastPullTimestamp,
   autoCommitsTotal, commitLinesAdded, commitLinesRemoved,
   fileWatcherActive, fileChangeEvents, retentionCleanupTotal,
-  retentionCleanupDuration, settingsSavesTotal, classifyPushError
+  retentionCleanupDuration, settingsSavesTotal, classifyPushError, classifyPullError
 } from './utils/metrics.js';
+import { initAiCommit, generateAiCommitMessage } from './utils/ai-commit.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -81,6 +83,11 @@ const FILE_ENV_ALLOWLIST = new Set([
   'CONFIG_PATH', 'PORT', 'HOST',
   'DEBOUNCE_TIME', 'DEBOUNCE_TIME_UNIT',
   'HISTORY_RETENTION', 'RETENTION_TYPE', 'RETENTION_VALUE', 'RETENTION_UNIT',
+  'OPENROUTER_GENERATE_COMMIT_MESSAGES', 'OPENROUTER_API_KEY', 'OPENROUTER_MODEL', 'OPENROUTER_PROMPT',
+  'CLOUD_SYNC_ENABLED', 'CLOUD_SYNC_REMOTE_URL', 'CLOUD_SYNC_AUTH_USER', 'CLOUD_SYNC_AUTH_TOKEN',
+  'CLOUD_SYNC_AUTH_PROVIDER', 'CLOUD_SYNC_PUSH_FREQUENCY',
+  'CLOUD_SYNC_PULL_BEFORE_PUSH', 'CLOUD_SYNC_PULL_REBASE', 'CLOUD_SYNC_INCLUDE_SECRETS',
+  'CLOUD_SYNC_BRANCH',
 ]);
 for (const baseName of FILE_ENV_ALLOWLIST) {
   if (process.env[baseName]) continue; // explicit var takes precedence
@@ -357,12 +364,19 @@ let runtimeSettings = {
     githubRemoteUrl: '', // Stored GitHub URL (preserved when switching)
     customRemoteUrl: '', // Stored Custom URL (preserved when switching)
     authProvider: '', // 'github' or 'generic'
+    authUser: '', // Username for HTTP Basic Auth (used with authToken)
     authToken: '', // OAuth token or PAT
     pushFrequency: 'manual', // 'manual', 'every_commit', 'hourly', 'daily'
+    pullBeforePush: false, // Pull from remote before pushing
+    pullRebase: true, // Use --rebase when pulling (false = normal merge)
     includeSecrets: false, // Default to FALSE (exclude by default)
+    branch: 'develop', // Remote branch name for push/pull
     lastPushTime: null,
     lastPushStatus: null, // 'success', 'failed'
-    lastPushError: null
+    lastPushError: null,
+    lastPullTime: null,
+    lastPullStatus: null, // 'success', 'failed'
+    lastPullError: null
   },
   // File extension configuration - what gets tracked/ignored
   extensions: {
@@ -457,6 +471,45 @@ function loadSettingsFromEnv() {
       console.log(`[init] Warning: Invalid ${schema.envKey}='${envValue}', ${result.error}.`);
     }
   }
+  // Cloud sync env vars (nested object, handled separately)
+  const CLOUD_SYNC_ENV_MAP = {
+    enabled:        { envKey: 'CLOUD_SYNC_ENABLED',         type: 'boolean' },
+    remoteUrl:      { envKey: 'CLOUD_SYNC_REMOTE_URL',      type: 'string' },
+    authUser:       { envKey: 'CLOUD_SYNC_AUTH_USER',        type: 'string' },
+    authToken:      { envKey: 'CLOUD_SYNC_AUTH_TOKEN',       type: 'string' },
+    authProvider:   { envKey: 'CLOUD_SYNC_AUTH_PROVIDER',    type: 'enum', values: ['github', 'generic'] },
+    pushFrequency:  { envKey: 'CLOUD_SYNC_PUSH_FREQUENCY',  type: 'enum', values: ['manual', 'every_commit', 'hourly', 'daily'] },
+    pullBeforePush: { envKey: 'CLOUD_SYNC_PULL_BEFORE_PUSH', type: 'boolean' },
+    pullRebase:     { envKey: 'CLOUD_SYNC_PULL_REBASE',      type: 'boolean' },
+    includeSecrets: { envKey: 'CLOUD_SYNC_INCLUDE_SECRETS',  type: 'boolean' },
+    branch:         { envKey: 'CLOUD_SYNC_BRANCH',           type: 'string' },
+  };
+
+  const cloudSyncOverrides = {};
+  for (const [field, schema] of Object.entries(CLOUD_SYNC_ENV_MAP)) {
+    const envValue = process.env[schema.envKey];
+    if (envValue === undefined) continue;
+    if (schema.type === 'string') {
+      const trimmed = envValue.trim();
+      if (trimmed) {
+        cloudSyncOverrides[field] = trimmed;
+        sources[`cloudSync.${field}`] = `env: ${schema.envKey}`;
+      }
+    } else {
+      const result = parseEnvVarValue(field, schema, envValue);
+      if (result.valid) {
+        cloudSyncOverrides[field] = result.value;
+        sources[`cloudSync.${field}`] = `env: ${schema.envKey}`;
+      } else {
+        console.log(`[init] Warning: Invalid ${schema.envKey}='${envValue}', ${result.error}.`);
+      }
+    }
+  }
+
+  if (Object.keys(cloudSyncOverrides).length > 0) {
+    settings.cloudSync = cloudSyncOverrides;
+  }
+
   return { settings, sources };
 }
 
@@ -595,6 +648,10 @@ async function loadRuntimeSettings() {
 
   // Layer 1: Apply environment variables
   const envResult = loadSettingsFromEnv();
+  if (envResult.settings.cloudSync) {
+    runtimeSettings.cloudSync = { ...runtimeSettings.cloudSync, ...envResult.settings.cloudSync };
+    delete envResult.settings.cloudSync;
+  }
   runtimeSettings = { ...runtimeSettings, ...envResult.settings };
   Object.assign(settingSources, envResult.sources);
 
@@ -612,6 +669,10 @@ async function loadRuntimeSettings() {
         }
       }
 
+      if (fileSettings.cloudSync) {
+        runtimeSettings.cloudSync = { ...runtimeSettings.cloudSync, ...fileSettings.cloudSync };
+        delete fileSettings.cloudSync;
+      }
       runtimeSettings = { ...runtimeSettings, ...fileSettings };
     } catch (e) {
       if (e.code === 'ENOENT') {
@@ -626,9 +687,13 @@ async function loadRuntimeSettings() {
       runtimeSettings.cloudSync = {
         enabled: false,
         remoteUrl: '',
+        authUser: '',
         authToken: '',
         pushFrequency: 'manual',
-        includeSecrets: false
+        pullBeforePush: false,
+        pullRebase: true,
+        includeSecrets: false,
+        branch: 'develop'
       };
     }
 
@@ -809,6 +874,9 @@ async function initRepo() {
   // Load runtime settings first
   await loadRuntimeSettings();
 
+  // Initialize AI commit message generation (after env/_FILE vars are resolved)
+  initAiCommit();
+
   try {
     // Determine CONFIG_PATH
     CONFIG_PATH = process.env.CONFIG_PATH;
@@ -903,7 +971,7 @@ async function initRepo() {
       const status = await gitStatus();
 
       // Create initial commit with formatted message
-      const startupMessage = formatCommitMessage(status);
+      const startupMessage = await generateAiCommitMessage(formatCommitMessage(status));
       await gitCommit(startupMessage);
       console.log('Initialized Git repo with startup backup');
       console.log(`[log] ════════════════════════════════════════════════════`);
@@ -1003,7 +1071,7 @@ async function initRepo() {
 
       if (!status.isClean()) {
         // Non-empty commit - show file count or filename
-        const startupMessage = formatCommitMessage(status);
+        const startupMessage = await generateAiCommitMessage(formatCommitMessage(status));
         await gitCommit(startupMessage);
         console.log(`[init] Created startup backup commit with ${status.files.length} files`);
         console.log(`[log] ════════════════════════════════════════════════════`);
@@ -2184,15 +2252,16 @@ function initializeWatcher() {
         }
 
         // Create commit message based on number of files
-        let commitMessage;
+        let fallbackMessage;
         if (stagedFiles.length === 1) {
-          commitMessage = stagedFiles[0];
+          fallbackMessage = stagedFiles[0];
         } else if (stagedFiles.length === 2) {
-          commitMessage = stagedFiles.join(', ');
+          fallbackMessage = stagedFiles.join(', ');
         } else {
-          commitMessage = `${stagedFiles.length} files`;
+          fallbackMessage = `${stagedFiles.length} files`;
         }
 
+        const commitMessage = await generateAiCommitMessage(fallbackMessage);
         console.log(`[watcher] Committing: ${commitMessage} (${stagedFiles.length} file(s))`);
         await gitCommit(commitMessage);
         console.log(`Committed: ${commitMessage}`);
@@ -2221,7 +2290,7 @@ function initializeWatcher() {
           runtimeSettings.cloudSync.remoteUrl) {
           console.log('[watcher] Running cloud sync push after commit...');
           try {
-            await setupGitRemote(runtimeSettings.cloudSync.remoteUrl, runtimeSettings.cloudSync.authToken);
+            await setupGitRemote(runtimeSettings.cloudSync.remoteUrl, runtimeSettings.cloudSync.authToken, runtimeSettings.cloudSync.authUser);
             await pushToRemote(runtimeSettings.cloudSync.includeSecrets);
           } catch (e) {
             console.error('[watcher] Cloud sync push failed:', e.message);
@@ -3061,7 +3130,7 @@ function startCloudSyncScheduler() {
 
       if (shouldPush) {
         console.log(`[cloud-sync scheduler] Running ${settings.pushFrequency} push...`);
-        await setupGitRemote(settings.remoteUrl, settings.authToken);
+        await setupGitRemote(settings.remoteUrl, settings.authToken, settings.authUser);
         await pushToRemote(settings.includeSecrets);
       }
     } catch (error) {
@@ -3262,7 +3331,7 @@ app.post('/api/script/:id/restore', async (req, res) => {
  * @param {string} token - Authentication token
  * @returns {Object} Result with success status
  */
-async function setupGitRemote(url, token) {
+async function setupGitRemote(url, token, user) {
   try {
     let authenticatedUrl = url;
 
@@ -3270,11 +3339,13 @@ async function setupGitRemote(url, token) {
     const hasEmbeddedAuth = url.match(/:\/\/[^@]+@/);
 
     if (!hasEmbeddedAuth && token) {
-      // Insert token into URL for HTTPS or HTTP URLs
+      // Build credential string: user:token or just token
+      const credentials = user ? `${encodeURIComponent(user)}:${encodeURIComponent(token)}` : token;
+      // Insert credentials into URL for HTTPS or HTTP URLs
       if (url.startsWith('https://')) {
-        authenticatedUrl = url.replace('https://', `https://${token}@`);
+        authenticatedUrl = url.replace('https://', `https://${credentials}@`);
       } else if (url.startsWith('http://')) {
-        authenticatedUrl = url.replace('http://', `http://${token}@`);
+        authenticatedUrl = url.replace('http://', `http://${credentials}@`);
       }
     }
 
@@ -3405,20 +3476,29 @@ async function configureSecretsTracking(include) {
 async function pushToRemote(includeSecrets = false) {
   const startTime = Date.now();
   try {
+    // Pull before push if configured
+    if (runtimeSettings.cloudSync.pullBeforePush) {
+      console.log('[cloud-sync] Pull before push enabled, pulling...');
+      const pullResult = await pullFromRemote(runtimeSettings.cloudSync.pullRebase);
+      if (!pullResult.success) {
+        throw new Error(`Pre-push pull failed: ${pullResult.error}`);
+      }
+    }
+
     // Configure secrets tracking before pushing
     await configureSecretsTracking(includeSecrets);
 
     // Get current local branch
-    let localBranch = 'develop';
+    const configuredBranch = runtimeSettings.cloudSync.branch || 'develop';
+    let localBranch = configuredBranch;
     try {
       const branchResult = await gitRevparse(['--abbrev-ref', 'HEAD']);
-      localBranch = branchResult.trim() || 'develop';
+      localBranch = branchResult.trim() || configuredBranch;
     } catch (e) {
-      console.log('[cloud-sync] Could not determine branch, using develop');
+      console.log(`[cloud-sync] Could not determine branch, using ${configuredBranch}`);
     }
 
-    // Always push to 'develop' on remote (new default branch)
-    const remoteBranch = 'develop';
+    const remoteBranch = configuredBranch;
     console.log(`[cloud-sync] Push started (branch: ${localBranch} -> origin/${remoteBranch})`);
     await gitExec(['push', '-u', 'origin', `${localBranch}:${remoteBranch}`]);
 
@@ -3458,6 +3538,104 @@ async function pushToRemote(includeSecrets = false) {
     await saveRuntimeSettings();
 
     return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Pull changes from remote repository
+ * @param {boolean} rebase - Use --rebase (true) or normal merge (false)
+ * @returns {Object} Result with success status
+ */
+async function pullFromRemote(rebase = true) {
+  const startTime = Date.now();
+  try {
+    // Get current local branch
+    const configuredBranch = runtimeSettings.cloudSync.branch || 'develop';
+    let localBranch = configuredBranch;
+    try {
+      const branchResult = await gitRevparse(['--abbrev-ref', 'HEAD']);
+      localBranch = branchResult.trim() || configuredBranch;
+    } catch (e) {
+      console.log(`[cloud-sync] Could not determine branch, using ${configuredBranch}`);
+    }
+
+    const remoteBranch = configuredBranch;
+    const strategy = rebase ? 'rebase' : 'merge';
+    console.log(`[cloud-sync] Pull started (origin/${remoteBranch} -> ${localBranch}, strategy: ${strategy})`);
+
+    // Fetch first so we can check if there are changes
+    await gitExec(['fetch', 'origin', remoteBranch]);
+
+    // Check if there are incoming changes
+    let behindCount = 0;
+    try {
+      const countOutput = await gitRaw(['rev-list', '--count', `HEAD..origin/${remoteBranch}`]);
+      behindCount = parseInt(countOutput.trim()) || 0;
+    } catch (e) {
+      // Remote branch may not exist yet
+      console.log('[cloud-sync] Could not determine behind count, proceeding with pull');
+    }
+
+    if (behindCount === 0) {
+      const durationSec = (Date.now() - startTime) / 1000;
+      console.log(`[cloud-sync] Pull: already up to date (${durationSec.toFixed(1)}s)`);
+      pullTotal.inc({ status: 'success', reason: 'up_to_date' });
+      pullDuration.observe(durationSec);
+      lastPullTimestamp.set(Math.floor(Date.now() / 1000));
+
+      runtimeSettings.cloudSync.lastPullTime = new Date().toISOString();
+      runtimeSettings.cloudSync.lastPullStatus = 'success';
+      runtimeSettings.cloudSync.lastPullError = null;
+      await saveRuntimeSettings();
+
+      return { success: true, changes: false, behind: 0 };
+    }
+
+    // Pull with chosen strategy
+    const pullArgs = rebase
+      ? ['pull', '--rebase', 'origin', remoteBranch]
+      : ['pull', 'origin', remoteBranch];
+    await gitExec(pullArgs);
+
+    const durationSec = (Date.now() - startTime) / 1000;
+    console.log(`[cloud-sync] Pull succeeded: ${behindCount} commit(s) in ${durationSec.toFixed(1)}s`);
+
+    // Metrics
+    pullTotal.inc({ status: 'success', reason: 'ok' });
+    pullDuration.observe(durationSec);
+    lastPullTimestamp.set(Math.floor(Date.now() / 1000));
+
+    // Persist status
+    runtimeSettings.cloudSync.lastPullTime = new Date().toISOString();
+    runtimeSettings.cloudSync.lastPullStatus = 'success';
+    runtimeSettings.cloudSync.lastPullError = null;
+    await saveRuntimeSettings();
+
+    return { success: true, changes: true, behind: behindCount };
+
+  } catch (error) {
+    const durationSec = (Date.now() - startTime) / 1000;
+    const reason = classifyPullError(error.message);
+    console.error(`[cloud-sync] Pull failed: ${reason} - ${error.message}`);
+
+    // Abort rebase/merge if stuck
+    if (rebase) {
+      try { await gitExec(['rebase', '--abort']); } catch (e) { /* no rebase in progress */ }
+    } else {
+      try { await gitExec(['merge', '--abort']); } catch (e) { /* no merge in progress */ }
+    }
+
+    // Metrics
+    pullTotal.inc({ status: 'failure', reason });
+    pullDuration.observe(durationSec);
+
+    // Persist status
+    runtimeSettings.cloudSync.lastPullTime = new Date().toISOString();
+    runtimeSettings.cloudSync.lastPullStatus = 'error';
+    runtimeSettings.cloudSync.lastPullError = error.message;
+    await saveRuntimeSettings();
+
+    return { success: false, error: error.message, reason };
   }
 }
 
@@ -3795,7 +3973,12 @@ app.get('/api/cloud-sync/status', async (req, res) => {
       lastPushTime: runtimeSettings.cloudSync.lastPushTime,
       lastPushStatus: runtimeSettings.cloudSync.lastPushStatus,
       lastPushError: runtimeSettings.cloudSync.lastPushError,
-      pushFrequency: runtimeSettings.cloudSync.pushFrequency
+      pushFrequency: runtimeSettings.cloudSync.pushFrequency,
+      pullBeforePush: runtimeSettings.cloudSync.pullBeforePush,
+      pullRebase: runtimeSettings.cloudSync.pullRebase,
+      lastPullTime: runtimeSettings.cloudSync.lastPullTime,
+      lastPullStatus: runtimeSettings.cloudSync.lastPullStatus,
+      lastPullError: runtimeSettings.cloudSync.lastPullError
     });
   } catch (error) {
     console.error('[cloud-sync status] Error:', error);
@@ -3848,7 +4031,8 @@ app.post('/api/cloud-sync/push', async (req, res) => {
     // Set up remote (in case settings changed)
     const setupResult = await setupGitRemote(
       runtimeSettings.cloudSync.remoteUrl,
-      runtimeSettings.cloudSync.authToken
+      runtimeSettings.cloudSync.authToken,
+      runtimeSettings.cloudSync.authUser
     );
     if (!setupResult.success) {
       return res.json({ success: false, error: setupResult.error });
@@ -3864,18 +4048,54 @@ app.post('/api/cloud-sync/push', async (req, res) => {
 });
 
 
+// Pull from remote
+app.post('/api/cloud-sync/pull', async (req, res) => {
+  try {
+    if (!runtimeSettings.cloudSync.enabled && !req.body.force) {
+      return res.status(400).json({ success: false, error: 'Cloud sync is not enabled' });
+    }
+
+    if (!runtimeSettings.cloudSync.remoteUrl) {
+      return res.status(400).json({ success: false, error: 'Remote URL not configured' });
+    }
+
+    // Set up remote (in case settings changed)
+    const setupResult = await setupGitRemote(
+      runtimeSettings.cloudSync.remoteUrl,
+      runtimeSettings.cloudSync.authToken,
+      runtimeSettings.cloudSync.authUser
+    );
+    if (!setupResult.success) {
+      return res.json({ success: false, error: setupResult.error });
+    }
+
+    // Pull (request body can override rebase setting)
+    const rebase = req.body.rebase !== undefined ? !!req.body.rebase : runtimeSettings.cloudSync.pullRebase;
+    const pullResult = await pullFromRemote(rebase);
+    res.json(pullResult);
+  } catch (error) {
+    console.error('[cloud-sync pull] Error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
 // Save cloud sync settings
 app.post('/api/cloud-sync/settings', async (req, res) => {
   try {
     console.log('[cloud-sync settings] Received request:', JSON.stringify(req.body, null, 2));
-    const { enabled, remoteUrl, authToken, pushFrequency, includeSecrets, authProvider } = req.body;
+    const { enabled, remoteUrl, authToken, authUser, pushFrequency, includeSecrets, authProvider, pullBeforePush, pullRebase, branch } = req.body;
 
     // Update basic settings
     console.log('[cloud-sync settings] Updating local settings...');
     if (enabled !== undefined) runtimeSettings.cloudSync.enabled = enabled;
     if (authToken !== undefined) runtimeSettings.cloudSync.authToken = authToken;
+    if (authUser !== undefined) runtimeSettings.cloudSync.authUser = authUser;
     if (pushFrequency !== undefined) runtimeSettings.cloudSync.pushFrequency = pushFrequency;
     if (includeSecrets !== undefined) runtimeSettings.cloudSync.includeSecrets = includeSecrets;
+    if (pullBeforePush !== undefined) runtimeSettings.cloudSync.pullBeforePush = pullBeforePush;
+    if (pullRebase !== undefined) runtimeSettings.cloudSync.pullRebase = pullRebase;
+    if (branch !== undefined) runtimeSettings.cloudSync.branch = branch;
 
     // Handle provider and URL switching
     const oldProvider = runtimeSettings.cloudSync.authProvider;
@@ -3938,7 +4158,7 @@ app.post('/api/cloud-sync/settings', async (req, res) => {
     // Set up remote if URL and token provided
     if (effectiveUrl && enabled) {
       console.log('[cloud-sync settings] Setting up git remote...');
-      await setupGitRemote(effectiveUrl, authToken || runtimeSettings.cloudSync.authToken);
+      await setupGitRemote(effectiveUrl, authToken || runtimeSettings.cloudSync.authToken, runtimeSettings.cloudSync.authUser);
     }
 
     // Apply secrets tracking configuration immediately

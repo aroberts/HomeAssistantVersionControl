@@ -140,6 +140,17 @@ export const lastPushTimestamp = registerMetric(
   new Gauge('havc_cloud_sync_last_push_timestamp_seconds', 'Timestamp of last push')
 );
 
+// Pull metrics
+export const pullTotal = registerMetric(
+  new Counter('havc_cloud_sync_pull_total', 'Total cloud sync pulls', ['status', 'reason'])
+);
+export const pullDuration = registerMetric(
+  new Histogram('havc_cloud_sync_pull_duration_seconds', 'Pull duration in seconds', [1, 5, 15, 30, 60, 120])
+);
+export const lastPullTimestamp = registerMetric(
+  new Gauge('havc_cloud_sync_last_pull_timestamp_seconds', 'Timestamp of last pull')
+);
+
 // Commit + diff metrics
 export const autoCommitsTotal = registerMetric(
   new Counter('havc_auto_commits_total', 'Total auto-commits')
@@ -165,6 +176,11 @@ export const retentionCleanupTotal = registerMetric(
 );
 export const retentionCleanupDuration = registerMetric(
   new Histogram('havc_retention_cleanup_duration_seconds', 'Retention cleanup duration', [1, 5, 15, 30, 60, 120])
+);
+
+// AI commit metrics
+export const aiCommitFailures = registerMetric(
+  new Counter('havc_ai_commit_failures_total', 'AI commit message generation failures')
 );
 
 // Operational metrics
@@ -269,6 +285,23 @@ export async function collectMetrics() {
 appInfo.set({ version: '1.1.1', node_version: process.version }, 1);
 
 console.log(`[metrics] Registry initialized with ${registry.length} metrics`);
+
+/**
+ * Classify a pull error into a reason category.
+ */
+export function classifyPullError(errorMessage) {
+  const msg = (errorMessage || '').toLowerCase();
+  if (msg.includes('conflict') || msg.includes('overwritten by merge')) {
+    return 'conflict';
+  }
+  if (msg.includes('authentication') || msg.includes('auth') || msg.includes('permission') || msg.includes('403') || msg.includes('401')) {
+    return 'auth';
+  }
+  if (msg.includes('could not resolve') || msg.includes('connection') || msg.includes('network') || msg.includes('timeout') || msg.includes('unable to access')) {
+    return 'network';
+  }
+  return 'other';
+}
 
 /**
  * Classify a push error into a reason category.
