@@ -1,6 +1,8 @@
 name: Docker
 
 on:
+  push:
+    branches: [main, master]
   release:
     types: [published]
   workflow_dispatch:
@@ -48,6 +50,8 @@ jobs:
             type=raw,value=beta,enable=${{ github.ref == 'refs/heads/develop' || (github.event_name == 'release' && github.event.release.prerelease) }}
             # Branch tagging
             type=ref,event=branch
+            # Date-based tagging
+            type=raw,value={{date 'YYYY-MM-DD'}},enable=${{ github.event_name == 'push' }}
             # Commit SHA tagging (simple sha for pushes only)
             type=sha,enable=${{ github.event_name == 'push' }}
 
