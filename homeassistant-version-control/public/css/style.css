@@ -490,6 +490,11 @@ body {
   white-space: nowrap;
 }
 
+.commit-file.ai-message {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
 /* === Files === */
 .file {
   background: var(--bg-elevated);
@@ -1067,6 +1072,14 @@ input:checked+.toggle-slider:before {
 
 .commit-viewer-info {
   flex: 1;
+}
+
+.commit-viewer-info .commit-message {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 500;
+  margin-bottom: 8px;
+  line-height: 1.4;
 }
 
 .commit-viewer-info .commit-files-summary {

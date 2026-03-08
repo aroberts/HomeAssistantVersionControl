@@ -2457,6 +2457,33 @@ function refreshCurrent() {
   }
 }
 
+/**
+ * Classify a commit message as either an AI-generated description or a
+ * traditional filename/pattern-based message.
+ */
+function classifyCommitMessage(message) {
+  // Known old-style prefixes/patterns
+  if (/^Auto-save:/i.test(message)) return { type: 'filename', displayText: message };
+  if (/^Restore[ :]/.test(message)) return { type: 'filename', displayText: message };
+  if (/^Merged history /i.test(message)) return { type: 'filename', displayText: message };
+  if (/^Startup backup:/i.test(message)) return { type: 'filename', displayText: message };
+  if (/^Initial commit/i.test(message)) return { type: 'filename', displayText: message };
+
+  // Looks like a file list: comma-separated tokens ending in known extensions
+  if (/\.(yaml|yml|json|py|txt|conf|js|ts|css|html)\b/i.test(message) &&
+      !message.includes('  ') && message.length < 200) {
+    return { type: 'filename', displayText: message };
+  }
+
+  // Single bare filename (no spaces, has extension)
+  if (/^[^\s]+\.\w{1,10}$/.test(message.trim())) {
+    return { type: 'filename', displayText: message };
+  }
+
+  // Otherwise treat as AI-generated natural language
+  return { type: 'ai', displayText: message };
+}
+
 async function loadTimeline() {
   try {
     const response = await fetch(`${API}/git/history`);
@@ -2621,62 +2648,72 @@ async function displayCommits(commits) {
           minute: '2-digit'
         });
 
-        // Extract just the filename from the commit message
-        let fileName = commit.message;
+        const classified = classifyCommitMessage(commit.message);
+        let displayText;
+        let aiClass = '';
 
-        // Try to extract filename from various commit message formats
-        // Pattern 1: "file1.yaml, file2.yaml" (multiple files)
-        if (commit.message.includes(',')) {
-          // Keep the comma-separated list as-is
-          fileName = commit.message;
-        }
-        // Pattern 2: "Auto-save: automations.yaml - timestamp"
-        else if (commit.message.includes(' - ')) {
-          const beforeDash = commit.message.split(' - ')[0];
-          if (beforeDash.includes(':')) {
-            fileName = beforeDash.split(':')[1].trim();
-          } else {
-            fileName = beforeDash;
-          }
-        }
-        // Pattern 2: "Restore: filename.yaml to hash"
-        else if (commit.message.startsWith('Restore: ') && commit.message.includes(' to ')) {
-          const afterRestore = commit.message.substring('Restore: '.length);
-          const beforeTo = afterRestore.split(' to ')[0];
-          fileName = beforeTo.trim();
-        }
-        // Pattern 3: "Restore automation 'X' in filename.yaml to commit hash"
-        else if (commit.message.includes(' in ')) {
-          const match = commit.message.match(/ in ([^\s]+\.(yaml|yml|txt|json|py))/i);
-          if (match) {
-            fileName = match[1];
-          }
-        }
-        // Pattern 4: "Merged history ISO_DATE"
-        else if (commit.message.startsWith('Merged history ')) {
-          const isoDate = commit.message.substring('Merged history '.length).trim();
-          // User requested simple "Merged" text instead of full date
-          fileName = 'Merged';
-        }
-        // Pattern 5: "Startup backup: timestamp (X files)"
-        else if (commit.message.includes('(') && commit.message.includes(')')) {
-          const match = commit.message.match(/\((\d+) files?\)/);
-          if (match) {
-            fileName = `${match[1]} files`;
-          }
-        }
+        if (classified.type === 'ai') {
+          displayText = classified.displayText;
+          aiClass = ' ai-message';
+        } else {
+          // Extract just the filename from the commit message
+          let fileName = commit.message;
 
-        // Clean up status labels if present (e.g. "file.yaml (Added)")
-        // This ensures the left panel shows clean filenames while the right panel shows status
-        fileName = fileName.replace(/\s+\((Added|Deleted|Modified)\)$/i, '');
+          // Try to extract filename from various commit message formats
+          // Pattern 1: "file1.yaml, file2.yaml" (multiple files)
+          if (commit.message.includes(',')) {
+            // Keep the comma-separated list as-is
+            fileName = commit.message;
+          }
+          // Pattern 2: "Auto-save: automations.yaml - timestamp"
+          else if (commit.message.includes(' - ')) {
+            const beforeDash = commit.message.split(' - ')[0];
+            if (beforeDash.includes(':')) {
+              fileName = beforeDash.split(':')[1].trim();
+            } else {
+              fileName = beforeDash;
+            }
+          }
+          // Pattern 2: "Restore: filename.yaml to hash"
+          else if (commit.message.startsWith('Restore: ') && commit.message.includes(' to ')) {
+            const afterRestore = commit.message.substring('Restore: '.length);
+            const beforeTo = afterRestore.split(' to ')[0];
+            fileName = beforeTo.trim();
+          }
+          // Pattern 3: "Restore automation 'X' in filename.yaml to commit hash"
+          else if (commit.message.includes(' in ')) {
+            const match = commit.message.match(/ in ([^\s]+\.(yaml|yml|txt|json|py))/i);
+            if (match) {
+              fileName = match[1];
+            }
+          }
+          // Pattern 4: "Merged history ISO_DATE"
+          else if (commit.message.startsWith('Merged history ')) {
+            const isoDate = commit.message.substring('Merged history '.length).trim();
+            // User requested simple "Merged" text instead of full date
+            fileName = 'Merged';
+          }
+          // Pattern 5: "Startup backup: timestamp (X files)"
+          else if (commit.message.includes('(') && commit.message.includes(')')) {
+            const match = commit.message.match(/\((\d+) files?\)/);
+            if (match) {
+              fileName = `${match[1]} files`;
+            }
+          }
 
-        // Remove surrounding quotes from filenames (e.g. "pizza-avocado 1 copy.yaml" becomes pizza-avocado 1 copy.yaml)
-        fileName = fileName.replace(/^["']|["']$/g, '');
+          // Clean up status labels if present (e.g. "file.yaml (Added)")
+          fileName = fileName.replace(/\s+\((Added|Deleted|Modified)\)$/i, '');
+
+          // Remove surrounding quotes from filenames
+          fileName = fileName.replace(/^["']|["']$/g, '');
+
+          displayText = fileName;
+        }
 
         html += `
               <div class="commit" onclick="showCommit('${commit.hash}')" oncontextmenu="showTimelineContextMenu(event, '${commit.hash}')" id="commit-${commit.hash}">
                 <div class="commit-time">${timeString}</div>
-                <div class="commit-file" title="${fileName}">${fileName}</div>
+                <div class="commit-file${aiClass}" title="${escapeHtml(displayText)}">${escapeHtml(displayText)}</div>
               </div>
             `;
       }
@@ -3096,10 +3133,21 @@ async function displayCommitDiff(status, hash, diff, commitDate = null) {
   }
 
   // Build the HTML for the right panel
+  // Show AI commit message in the header if applicable
+  const commit = allCommits.find(c => c.hash === hash);
+  let commitMessageHtml = '';
+  if (commit) {
+    const classified = classifyCommitMessage(commit.message);
+    if (classified.type === 'ai') {
+      commitMessageHtml = `<div class="commit-message">${escapeHtml(classified.displayText)}</div>`;
+    }
+  }
+
   const html = `
         <div class="commit-viewer">
           <div class="commit-viewer-header">
             <div class="commit-viewer-info">
+              ${commitMessageHtml}
               <div class="commit-files-summary">${fileSummary}</div>
             </div>
           </div>
