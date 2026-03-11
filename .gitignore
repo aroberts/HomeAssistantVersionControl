@@ -5,3 +5,4 @@ node_modules/
 .env
 deploy.sh
 extra/
+homeassistant-version-control/test-*.js

@@ -19,11 +19,14 @@ services:
       # Format: http://homeassistant.local:8123 or http://192.168.1.100:8123
       - HA_URL=http://homeassistant.local:8123
 
+      # Optional: Log verbosity (error, warn, info, debug). Default: info
+      # - LOG_LEVEL=info
+
       # Optional: AI-generated commit messages
       # Works with any OpenAI-compatible API: Ollama, Open WebUI, OpenRouter, etc.
       # - AI_GENERATE_COMMIT_MESSAGES=true
       # - AI_MODEL=llama3.2            # Required when enabled
-      # - AI_BASE_URL=http://ollama:11434/v1   # Default: https://openrouter.ai/api/v1
+      # - AI_BASE_URL=http://ollama:11434/v1   # Required when enabled
       # - AI_API_KEY=                   # Optional for local providers (Ollama)
       # - AI_PROMPT=                    # Optional: override the default system prompt
     volumes:

@@ -183,6 +183,7 @@ For containerized deployments (especially when not persisting the `/data` direct
 | `RETENTION_TYPE` | Retention Type | String | `time`, `versions` | `time` |
 | `RETENTION_VALUE` | Retention Value | Number | ≥ 1 | `90` |
 | `RETENTION_UNIT` | Retention Unit | String | `hours`, `days`, `weeks`, `months` | `days` |
+| `LOG_LEVEL` | Log verbosity | String | `error`, `warn`, `info`, `debug` | `info` |
 
 **Notes:**
 - Boolean values are case-insensitive and accept: `true`/`false`, `yes`/`no`, `1`/`0`
