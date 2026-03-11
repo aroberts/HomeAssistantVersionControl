@@ -367,6 +367,73 @@ curl -X POST http://homeassistant.local:54001/api/retention/cleanup \
   -d '{"hours": 24}'
 ```
 
+## AI-Generated Commit Messages
+
+Automatically generate meaningful commit messages using any OpenAI-compatible AI provider. Instead of generic timestamps, your timeline shows messages like *"Update porch light automation to trigger at sunset"*.
+
+This works with **local** providers (Ollama, Open WebUI) or **cloud** providers (OpenRouter, OpenAI, etc.) — anything that exposes the `/v1/chat/completions` endpoint.
+
+### Setup
+
+Set the following environment variables:
+
+| Variable | Required | Description |
+| :--- | :--- | :--- |
+| `AI_GENERATE_COMMIT_MESSAGES` | Yes | Set to `true` to enable |
+| `AI_BASE_URL` | Yes | Base URL of the API (see table below) |
+| `AI_MODEL` | Yes | Model identifier (e.g. `llama3.2`, `mistral`, `google/gemini-2.0-flash-001`) |
+| `AI_API_KEY` | No | Bearer token for authentication. Optional for local providers like Ollama |
+| `AI_PROMPT` | No | Override the default system prompt for commit message generation |
+
+All variables support Docker secrets via the `_FILE` suffix (e.g. `AI_API_KEY_FILE=/run/secrets/ai_key`).
+
+### Provider Endpoints
+
+| Provider | `AI_BASE_URL` | Firewall target | Auth required |
+| :--- | :--- | :--- | :--- |
+| Ollama | `http://<host>:11434/v1` | `<host>:11434` | No |
+| Open WebUI | `http://<host>:3000/api` | `<host>:3000` | Depends on config |
+| OpenRouter | `https://openrouter.ai/api/v1` | `openrouter.ai:443` | Yes |
+| OpenAI | `https://api.openai.com/v1` | `api.openai.com:443` | Yes |
+
+The application appends `/chat/completions` to `AI_BASE_URL` automatically.
+
+### Docker Compose Example
+
+```yaml
+services:
+  havc:
+    image: ghcr.io/aroberts/home-assistant-version-control:latest
+    environment:
+      - AI_GENERATE_COMMIT_MESSAGES=true
+      - AI_BASE_URL=http://ollama:11434/v1
+      - AI_MODEL=llama3.2
+    # ...
+```
+
+### Test Script
+
+A test script is included to debug AI endpoint connectivity and response parsing without running the full server:
+
+```bash
+cd homeassistant-version-control
+AI_BASE_URL=http://localhost:11434/v1 AI_MODEL=llama3.2 node test-ai-commit.js
+```
+
+The script sends a sample diff, dumps the full raw API response, and diagnoses common issues (empty responses, unexpected response structure, thinking-model quirks).
+
+## Fork Changes
+
+This fork adds the following features on top of the upstream project:
+
+- **AI-generated commit messages** — Meaningful commit messages via any OpenAI-compatible API (see above)
+- **AI commit messages in timeline UI** — AI-generated messages are displayed in the version history
+- **Cloud sync pull** — Pull from remote before pushing to handle multi-instance setups
+- **Configurable sync branch** — Set the remote branch name via `CLOUD_SYNC_BRANCH`
+- **Configurable auth provider** — Support for Gitea and generic Git servers via `CLOUD_SYNC_AUTH_PROVIDER`
+- **Remote URL redaction** — Credentials in remote URLs are redacted in logs
+- **Security fixes** — Removed unnecessary API key, hardened file access
+
 ## Contributing
 
 Found a bug? Feel free to [open an issue](https://github.com/saihgupr/HomeAssistantVersionControl/issues).

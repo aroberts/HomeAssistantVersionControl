@@ -1,7 +1,6 @@
 import { gitDiff } from './git.js';
 import { aiCommitFailures } from './metrics.js';
 
-const DEFAULT_MODEL = 'liquid/lfm-2.5-1.2b-thinking:free';
 const DEFAULT_PROMPT = [
   'You are a commit message generator for a Home Assistant configuration repository.',
   'Given a git diff, write a concise commit message summarizing the changes.',
@@ -9,32 +8,43 @@ const DEFAULT_PROMPT = [
   'Do not use conventional commit prefixes. Do not mention file paths unless they add clarity.',
   'Output ONLY the commit message, nothing else. Keep it under 72 characters.',
 ].join(' ');
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 let config = null;
 
 export function initAiCommit() {
-  const enabled = process.env.OPENROUTER_GENERATE_COMMIT_MESSAGES === 'true';
+  const enabled = process.env.AI_GENERATE_COMMIT_MESSAGES === 'true';
   if (!enabled) {
-    console.log('[ai-commit] Disabled (OPENROUTER_GENERATE_COMMIT_MESSAGES != true)');
+    console.log('[ai-commit] Disabled (AI_GENERATE_COMMIT_MESSAGES != true)');
     config = null;
     return;
   }
 
-  const apiKey = process.env.OPENROUTER_API_KEY;
+  const baseUrl = process.env.AI_BASE_URL;
+  const apiKey = process.env.AI_API_KEY;
+  const model = process.env.AI_MODEL;
+  const prompt = process.env.AI_PROMPT || DEFAULT_PROMPT;
+
+  if (!baseUrl) {
+    console.warn('[ai-commit] Enabled but AI_BASE_URL is not set — will fall back to simple messages');
+    config = null;
+    return;
+  }
+
+  if (!model) {
+    console.warn('[ai-commit] Enabled but AI_MODEL is not set — will fall back to simple messages');
+    config = null;
+    return;
+  }
+
+  // API key is optional for local providers (Ollama, etc.)
   if (!apiKey) {
-    console.warn('[ai-commit] Enabled but OPENROUTER_API_KEY is not set — will fall back to simple messages');
-    config = null;
-    return;
+    console.log('[ai-commit] No API key set — assuming local provider (Ollama, Open WebUI, etc.)');
   }
 
-  config = {
-    apiKey,
-    model: process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
-    prompt: process.env.OPENROUTER_PROMPT || DEFAULT_PROMPT,
-  };
+  const url = baseUrl.replace(/\/+$/, '') + '/chat/completions';
 
-  console.log(`[ai-commit] Enabled with model: ${config.model}`);
+  config = { url, apiKey, model, prompt };
+  console.log(`[ai-commit] Enabled — model: ${config.model}, endpoint: ${config.url}`);
 }
 
 export function isAiCommitEnabled() {
@@ -56,12 +66,14 @@ export async function generateAiCommitMessage(fallbackMessage) {
 
     const userContent = `Diff summary:\n${diff}\n\nFull diff:\n${truncatedDiff}`;
 
-    const response = await fetch(OPENROUTER_URL, {
+    const headers = { 'Content-Type': 'application/json' };
+    if (config.apiKey) {
+      headers['Authorization'] = `Bearer ${config.apiKey}`;
+    }
+
+    const response = await fetch(config.url, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${config.apiKey}`,
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({
         model: config.model,
         messages: [
@@ -75,14 +87,14 @@ export async function generateAiCommitMessage(fallbackMessage) {
 
     if (!response.ok) {
       const body = await response.text();
-      throw new Error(`OpenRouter API ${response.status}: ${body}`);
+      throw new Error(`AI API ${response.status}: ${body}`);
     }
 
     const data = await response.json();
     const message = data.choices?.[0]?.message?.content?.trim();
 
     if (!message) {
-      throw new Error('Empty response from OpenRouter');
+      throw new Error(`Empty response from ${config.url}`);
     }
 
     // Strip quotes if the model wraps the message in them
