@@ -8,6 +8,7 @@ import {
   gitRaw
 } from './utils/git.js';
 import path from 'path';
+import { log } from './utils/log.js';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -24,14 +25,14 @@ const BASE_DIR = __dirname;
  * @returns {Object} Object with automationPaths and scriptPaths arrays
  */
 export async function getConfigFilePaths(configPath) {
-  console.log('[getConfigFilePaths] Looking for configuration.yaml in:', configPath);
+  log.debug('[getConfigFilePaths] Looking for configuration.yaml in:', configPath);
   const configFile = path.join(configPath, 'configuration.yaml');
   const automationPaths = [];
   const scriptPaths = [];
 
   try {
     const configContent = await fs.promises.readFile(configFile, 'utf-8');
-    console.log('[getConfigFilePaths] Found configuration.yaml, parsing...');
+    log.debug('[getConfigFilePaths] Found configuration.yaml, parsing...');
 
     // Manually parse for automation and script directives
     // Handle Home Assistant's !include syntax
@@ -102,8 +103,8 @@ export async function getConfigFilePaths(configPath) {
     scriptPaths.push(path.join(configPath, 'scripts.yaml'));
   }
 
-  console.log('[getConfigFilePaths] Automation paths:', automationPaths);
-  console.log('[getConfigFilePaths] Script paths:', scriptPaths);
+  log.debug('[getConfigFilePaths] Automation paths:', automationPaths);
+  log.debug('[getConfigFilePaths] Script paths:', scriptPaths);
   return { automationPaths, scriptPaths };
 }
 
@@ -267,12 +268,12 @@ export async function extractAutomations(configPath = null) {
         }
       } catch (error) {
         // Skip invalid YAML files
-        console.log(`Skipping ${filePath}: invalid YAML`);
+        log.debug(`Skipping ${filePath}: invalid YAML`);
       }
     }
 
   } catch (error) {
-    console.error('Error extracting automations:', error);
+    log.error('Error extracting automations:', error);
   }
 
   return automations;
@@ -384,12 +385,12 @@ export async function extractScripts(configPath = null) {
         }
       } catch (error) {
         // Skip invalid YAML files
-        console.log(`Skipping ${filePath}: invalid YAML`);
+        log.debug(`Skipping ${filePath}: invalid YAML`);
       }
     }
 
   } catch (error) {
-    console.error('Error extracting scripts:', error);
+    log.error('Error extracting scripts:', error);
   }
 
   return scripts;
@@ -670,7 +671,7 @@ export async function getAutomationHistoryMetadata(automationId, configPath) {
       gitFilePath
     };
   } catch (error) {
-    console.error('[getAutomationHistoryMetadata] Error:', error);
+    log.error('[getAutomationHistoryMetadata] Error:', error);
     return { success: false, commits: [], error: error.message };
   }
 }
@@ -719,7 +720,7 @@ export async function getAutomationAtCommit(automationId, commitHash, configPath
 
     return { success: !!auto, automation: auto };
   } catch (error) {
-    console.error(`[getAutomationAtCommit] Error at commit ${commitHash}:`, error);
+    log.error(`[getAutomationAtCommit] Error at commit ${commitHash}:`, error);
     return { success: false, automation: null, error: error.message };
   }
 }
@@ -760,7 +761,7 @@ export async function getScriptHistoryMetadata(scriptId, configPath) {
       gitFilePath
     };
   } catch (error) {
-    console.error('[getScriptHistoryMetadata] Error:', error);
+    log.error('[getScriptHistoryMetadata] Error:', error);
     return { success: false, commits: [], error: error.message };
   }
 }
@@ -809,7 +810,7 @@ export async function getScriptAtCommit(scriptId, commitHash, configPath) {
 
     return { success: !!script, script };
   } catch (error) {
-    console.error(`[getScriptAtCommit] Error at commit ${commitHash}:`, error);
+    log.error(`[getScriptAtCommit] Error at commit ${commitHash}:`, error);
     return { success: false, script: null, error: error.message };
   }
 }
@@ -977,7 +978,7 @@ export async function getAutomationDiff(automationId, commitHash, configPath) {
     const diff = await gitDiff([`${prevHash}`, commitHash, '--', gitFilePath]);
     return diff;
   } catch (error) {
-    console.error('Error getting automation diff:', error);
+    log.error('Error getting automation diff:', error);
     return null;
   }
 }
@@ -998,7 +999,7 @@ export async function getScriptDiff(scriptId, commitHash, configPath) {
     const diff = await git.diff([`${prevHash}`, commitHash, '--', gitFilePath]);
     return diff;
   } catch (error) {
-    console.error('Error getting script diff:', error);
+    log.error('Error getting script diff:', error);
     return null;
   }
 }
@@ -1093,7 +1094,7 @@ export async function restoreAutomation(automationId, commitHash, configPath) {
     }
 
     if (!restoredAutomation) {
-      console.error(`[restoreAutomation] Could not find automation ${identifier} in commit ${commitHash} of file ${gitFilePath}`);
+      log.error(`[restoreAutomation] Could not find automation ${identifier} in commit ${commitHash} of file ${gitFilePath}`);
       return false;
     }
 
@@ -1109,7 +1110,7 @@ export async function restoreAutomation(automationId, commitHash, configPath) {
       // But if it's the "deleted items" flow, the file itself might be deleted? 
       // No, automations.yaml usually exists. If it's a split config file, it might be gone.
       // If file is missing, initialize as empty object/array depending on type?
-      console.log(`[restoreAutomation] File ${fullPath} not found, initializing new`);
+      log.debug(`[restoreAutomation] File ${fullPath} not found, initializing new`);
       currentFileContent = '';
     }
 
@@ -1142,10 +1143,10 @@ export async function restoreAutomation(automationId, commitHash, configPath) {
 
       if (existingIndex >= 0) {
         targetContainer[existingIndex] = restoredAutomation;
-        console.log(`[restoreAutomation] Replaced existing automation at index ${existingIndex}`);
+        log.debug(`[restoreAutomation] Replaced existing automation at index ${existingIndex}`);
       } else {
         targetContainer.push(restoredAutomation);
-        console.log(`[restoreAutomation] Appended new automation`);
+        log.debug(`[restoreAutomation] Appended new automation`);
       }
     } else {
       // Object: use identifier (or UUID) as key? 
@@ -1180,11 +1181,11 @@ export async function restoreAutomation(automationId, commitHash, configPath) {
     // Ensure directory exists
     await fs.promises.mkdir(path.dirname(fullPath), { recursive: true });
     await fs.promises.writeFile(fullPath, updatedYaml);
-    console.log(`[restoreAutomation] ✓ Automation '${identifier}' restored from ${commitDate}`);
+    log.info(`[restoreAutomation] ✓ Automation '${identifier}' restored from ${commitDate}`);
 
     return true;
   } catch (error) {
-    console.error('[restoreAutomation] Error:', error);
+    log.error('[restoreAutomation] Error:', error);
     return false;
   }
 }
@@ -1211,7 +1212,7 @@ export async function restoreScript(scriptId, commitHash, configPath) {
     const restoredScript = await getAutomationOrScriptFromContent(committedFileContent, identifier, 'script');
 
     if (!restoredScript) {
-      console.error(`[restoreScript] Could not find script ${identifier} in commit ${commitHash} of file ${gitFilePath}`);
+      log.error(`[restoreScript] Could not find script ${identifier} in commit ${commitHash} of file ${gitFilePath}`);
       return false;
     }
 
@@ -1220,7 +1221,7 @@ export async function restoreScript(scriptId, commitHash, configPath) {
     let currentData = yaml.load(currentFileContent);
 
     if (!currentData) {
-      console.error(`[restoreScript] Could not parse current YAML content for file ${gitFilePath}`);
+      log.error(`[restoreScript] Could not parse current YAML content for file ${gitFilePath}`);
       return false;
     }
 
@@ -1257,12 +1258,12 @@ export async function restoreScript(scriptId, commitHash, configPath) {
 
     // 6. Write the updated YAML back to the file
     await fs.promises.writeFile(fullPath, updatedYaml);
-    console.log(`[restoreScript] ✓ Script '${identifier}' restored from ${commitDate}`);
-    console.log(`[restoreScript] ✓ File watcher will auto-commit this change`);
+    log.info(`[restoreScript] ✓ Script '${identifier}' restored from ${commitDate}`);
+    log.debug(`[restoreScript] ✓ File watcher will auto-commit this change`);
 
     return true;
   } catch (error) {
-    console.error('[restoreScript] Error:', error);
+    log.error('[restoreScript] Error:', error);
     return false;
   }
 }

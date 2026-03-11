@@ -1,5 +1,6 @@
 import { gitDiff } from './git.js';
 import { aiCommitFailures } from './metrics.js';
+import { log } from './log.js';
 
 const DEFAULT_PROMPT = [
   'You are a commit message generator for a Home Assistant configuration repository.',
@@ -14,7 +15,7 @@ let config = null;
 export function initAiCommit() {
   const enabled = process.env.AI_GENERATE_COMMIT_MESSAGES === 'true';
   if (!enabled) {
-    console.log('[ai-commit] Disabled (AI_GENERATE_COMMIT_MESSAGES != true)');
+    log.info('[ai-commit] Disabled (AI_GENERATE_COMMIT_MESSAGES != true)');
     config = null;
     return;
   }
@@ -25,26 +26,26 @@ export function initAiCommit() {
   const prompt = process.env.AI_PROMPT || DEFAULT_PROMPT;
 
   if (!baseUrl) {
-    console.warn('[ai-commit] Enabled but AI_BASE_URL is not set — will fall back to simple messages');
+    log.warn('[ai-commit] Enabled but AI_BASE_URL is not set — will fall back to simple messages');
     config = null;
     return;
   }
 
   if (!model) {
-    console.warn('[ai-commit] Enabled but AI_MODEL is not set — will fall back to simple messages');
+    log.warn('[ai-commit] Enabled but AI_MODEL is not set — will fall back to simple messages');
     config = null;
     return;
   }
 
   // API key is optional for local providers (Ollama, etc.)
   if (!apiKey) {
-    console.log('[ai-commit] No API key set — assuming local provider (Ollama, Open WebUI, etc.)');
+    log.info('[ai-commit] No API key set — assuming local provider (Ollama, Open WebUI, etc.)');
   }
 
   const url = baseUrl.replace(/\/+$/, '') + '/chat/completions';
 
   config = { url, apiKey, model, prompt };
-  console.log(`[ai-commit] Enabled — model: ${config.model}, endpoint: ${config.url}`);
+  log.info(`[ai-commit] Enabled — model: ${config.model}, endpoint: ${config.url}`);
 }
 
 export function isAiCommitEnabled() {
@@ -99,10 +100,10 @@ export async function generateAiCommitMessage(fallbackMessage) {
 
     // Strip quotes if the model wraps the message in them
     const cleaned = message.replace(/^["']|["']$/g, '');
-    console.log(`[ai-commit] Generated: ${cleaned}`);
+    log.info(`[ai-commit] Generated: ${cleaned}`);
     return cleaned;
   } catch (error) {
-    console.warn(`[ai-commit] Failed to generate message: ${error.message}`);
+    log.warn(`[ai-commit] Failed to generate message: ${error.message}`);
     aiCommitFailures.inc();
     return fallbackMessage;
   }

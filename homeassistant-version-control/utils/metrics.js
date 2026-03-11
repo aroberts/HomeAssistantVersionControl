@@ -1,6 +1,7 @@
 import { gitExec } from './git.js';
 import fs from 'fs';
 import path from 'path';
+import { log } from './log.js';
 
 // ── Metric types ──────────────────────────────────────────
 
@@ -243,7 +244,7 @@ async function refreshGitCache() {
     }
 
     gitCacheTimestamp = now;
-    console.log(`[metrics] Git query cache refreshed (${Date.now() - start}ms)`);
+    log.debug(`[metrics] Git query cache refreshed (${Date.now() - start}ms)`);
   } catch {
     // Ignore cache refresh errors
   }
@@ -284,7 +285,7 @@ export async function collectMetrics() {
 // Initialize app info on import
 appInfo.set({ version: '1.1.1', node_version: process.version }, 1);
 
-console.log(`[metrics] Registry initialized with ${registry.length} metrics`);
+log.debug(`[metrics] Registry initialized with ${registry.length} metrics`);
 
 /**
  * Classify a pull error into a reason category.

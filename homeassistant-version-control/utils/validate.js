@@ -1,4 +1,5 @@
 import path from 'path';
+import { log } from './log.js';
 
 /**
  * Resolve userPath under basePath and verify it doesn't escape.
@@ -10,7 +11,7 @@ export function safePath(basePath, userPath) {
   }
 
   if (userPath.includes('\0')) {
-    console.log(`[security] Path traversal blocked: null byte in path (base: ${basePath})`);
+    log.info(`[security] Path traversal blocked: null byte in path (base: ${basePath})`);
     throw new Error('Invalid path: null bytes not allowed');
   }
 
@@ -18,7 +19,7 @@ export function safePath(basePath, userPath) {
   const resolved = path.resolve(basePath, userPath);
 
   if (resolved !== resolvedBase && !resolved.startsWith(resolvedBase + path.sep)) {
-    console.log(`[security] Path traversal blocked: ${userPath} (base: ${basePath})`);
+    log.info(`[security] Path traversal blocked: ${userPath} (base: ${basePath})`);
     throw new Error('Invalid path: traversal not allowed');
   }
 
@@ -45,7 +46,7 @@ export function isAllowedOrigin(origin) {
   try {
     parsed = new URL(origin);
   } catch {
-    console.log(`[security] CORS origin rejected: ${origin}`);
+    log.info(`[security] CORS origin rejected: ${origin}`);
     return false;
   }
 
@@ -61,7 +62,7 @@ export function isAllowedOrigin(origin) {
   if (ipv4Match) {
     const octets = ipv4Match.slice(1).map(Number);
     if (octets.some(o => o > 255)) {
-      console.log(`[security] CORS origin rejected: ${origin}`);
+      log.info(`[security] CORS origin rejected: ${origin}`);
       return false;
     }
 
@@ -73,6 +74,6 @@ export function isAllowedOrigin(origin) {
     if (octets[0] === 192 && octets[1] === 168) return true;
   }
 
-  console.log(`[security] CORS origin rejected: ${origin}`);
+  log.info(`[security] CORS origin rejected: ${origin}`);
   return false;
 }

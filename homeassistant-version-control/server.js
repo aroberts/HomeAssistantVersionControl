@@ -35,6 +35,7 @@ import {
   retentionCleanupDuration, settingsSavesTotal, classifyPushError, classifyPullError
 } from './utils/metrics.js';
 import { initAiCommit, generateAiCommitMessage } from './utils/ai-commit.js';
+import { log } from './utils/log.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -57,21 +58,6 @@ import {
   getScriptAtCommit
 } from './automation-parser.js';
 
-// Override console.log and console.error to add timestamps
-const originalConsoleLog = console.log;
-const originalConsoleError = console.error;
-
-function getTimestamp() {
-  return new Date().toISOString();
-}
-
-console.log = function (...args) {
-  originalConsoleLog(`[${getTimestamp()}]`, ...args);
-};
-
-console.error = function (...args) {
-  originalConsoleError(`[${getTimestamp()}]`, ...args);
-};
 
 
 
@@ -80,7 +66,7 @@ console.error = function (...args) {
 // Scoped to known app vars to avoid clobbering unrelated _FILE vars (e.g. NPM_CONFIG_FILE).
 const FILE_ENV_ALLOWLIST = new Set([
   'SUPERVISOR_TOKEN', 'HASSIO_TOKEN', 'HA_URL',
-  'CONFIG_PATH', 'PORT', 'HOST',
+  'CONFIG_PATH', 'PORT', 'HOST', 'LOG_LEVEL',
   'DEBOUNCE_TIME', 'DEBOUNCE_TIME_UNIT',
   'HISTORY_RETENTION', 'RETENTION_TYPE', 'RETENTION_VALUE', 'RETENTION_UNIT',
   'AI_GENERATE_COMMIT_MESSAGES', 'AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL', 'AI_PROMPT',
@@ -97,10 +83,10 @@ for (const baseName of FILE_ENV_ALLOWLIST) {
     const value = fs.readFileSync(filePath, 'utf-8').trim();
     if (value) {
       process.env[baseName] = value;
-      console.log(`[init] Loaded ${baseName} from ${baseName}_FILE`);
+      log.debug(`[init] Loaded ${baseName} from ${baseName}_FILE`);
     }
   } catch (e) {
-    console.error(`[init] Failed to read ${baseName}_FILE (${filePath}): ${e.message}`);
+    log.error(`[init] Failed to read ${baseName}_FILE (${filePath}): ${e.message}`);
   }
 }
 
@@ -111,7 +97,7 @@ const HOST = process.env.HOST || '::';
 // Ensure HOME is set for git
 if (!process.env.HOME) {
   process.env.HOME = '/tmp';
-  console.log('[init] Set HOME=/tmp for git compatibility');
+  log.debug('[init] Set HOME=/tmp for git compatibility');
 }
 
 // Configure git at runtime (safe.directory and identity)
@@ -121,9 +107,9 @@ try {
   execSync('git config --global --add safe.directory /usr/src/app', { stdio: 'pipe' });
   execSync('git config --global user.email "havc@local"', { stdio: 'pipe' });
   execSync('git config --global user.name "Home Assistant Version Control"', { stdio: 'pipe' });
-  console.log('[init] Git configured: safe.directory and identity set');
+  log.debug('[init] Git configured: safe.directory and identity set');
 } catch (e) {
-  console.error('[init] Failed to configure git:', e.message);
+  log.error('[init] Failed to configure git:', e.message);
 }
 
 app.use(express.json());
@@ -228,8 +214,8 @@ async function callHomeAssistantService(domain, service, serviceData = {}) {
     }
 
     if (!supervisorToken) {
-      console.log('[HA API] SUPERVISOR_TOKEN not available, skipping service call');
-      console.log('[HA API] Tried: SUPERVISOR_TOKEN, HASSIO_TOKEN env vars/_FILE and s6 paths');
+      log.debug('[HA API] SUPERVISOR_TOKEN not available, skipping service call');
+      log.debug('[HA API] Tried: SUPERVISOR_TOKEN, HASSIO_TOKEN env vars/_FILE and s6 paths');
 
       return { success: false, error: 'SUPERVISOR_TOKEN not available' };
     }
@@ -244,14 +230,14 @@ async function callHomeAssistantService(domain, service, serviceData = {}) {
       // Docker mode - use provided HA_URL
       const baseUrl = haUrl.replace(/\/$/, ''); // Remove trailing slash if present
       url = `${baseUrl}/api/services/${domain}/${service}`;
-      console.log(`[HA API] Using Docker mode with HA_URL: ${haUrl}`);
+      log.debug(`[HA API] Using Docker mode with HA_URL: ${haUrl}`);
     } else {
       // Addon mode - use supervisor endpoint
       url = `http://supervisor/core/api/services/${domain}/${service}`;
-      console.log(`[HA API] Using addon mode with supervisor endpoint`);
+      log.debug(`[HA API] Using addon mode with supervisor endpoint`);
     }
 
-    console.log(`[HA API] Calling service: ${domain}.${service}`);
+    log.debug(`[HA API] Calling service: ${domain}.${service}`);
 
     // Add timeout to prevent long waits (5 seconds)
     const controller = new AbortController();
@@ -271,23 +257,23 @@ async function callHomeAssistantService(domain, service, serviceData = {}) {
       clearTimeout(timeoutId);
 
       if (response.ok) {
-        console.log(`[HA API] Service ${domain}.${service} called successfully`);
+        log.debug(`[HA API] Service ${domain}.${service} called successfully`);
         return { success: true };
       } else {
         const errorText = await response.text();
-        console.error(`[HA API] Service call failed: ${response.status} ${errorText}`);
+        log.error(`[HA API] Service call failed: ${response.status} ${errorText}`);
         return { success: false, error: `HTTP ${response.status}: ${errorText}` };
       }
     } catch (fetchError) {
       clearTimeout(timeoutId);
       if (fetchError.name === 'AbortError') {
-        console.error(`[HA API] Request timeout after 5 seconds`);
+        log.error(`[HA API] Request timeout after 5 seconds`);
         return { success: false, error: 'Request timeout - check HA_URL is correct and Home Assistant is reachable' };
       }
       throw fetchError;
     }
   } catch (error) {
-    console.error(`[HA API] Error calling service ${domain}.${service}:`, error.message);
+    log.error(`[HA API] Error calling service ${domain}.${service}:`, error.message);
     return { success: false, error: error.message };
   }
 }
@@ -295,7 +281,7 @@ async function callHomeAssistantService(domain, service, serviceData = {}) {
 // Restart Home Assistant endpoint
 app.post('/api/ha/restart', async (req, res) => {
   try {
-    console.log('[HA API] Requesting Home Assistant restart...');
+    log.info('[HA API] Requesting Home Assistant restart...');
     const result = await callHomeAssistantService('homeassistant', 'restart');
     if (result.success) {
       res.json({ success: true, message: 'Home Assistant is restarting' });
@@ -303,7 +289,7 @@ app.post('/api/ha/restart', async (req, res) => {
       res.status(500).json({ success: false, error: result.error });
     }
   } catch (error) {
-    console.error('[HA API] Error restarting Home Assistant:', error);
+    log.error('[HA API] Error restarting Home Assistant:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -311,29 +297,29 @@ app.post('/api/ha/restart', async (req, res) => {
 
 // Error handler
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
+  log.error('Error:', err);
   res.status(500).json({ error: err.message });
 });
 
 // Global process handlers for diagnostics
 process.on('uncaughtException', (err) => {
-  console.error('!!!! UNCAUGHT EXCEPTION !!!!');
-  console.error(err);
+  log.error('!!!! UNCAUGHT EXCEPTION !!!!');
+  log.error(err);
   // Don't exit immediately, let the container manager handle it or try to recover
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('!!!! UNHANDLED REJECTION !!!!');
-  console.error('Reason:', reason);
+  log.error('!!!! UNHANDLED REJECTION !!!!');
+  log.error('Reason:', reason);
 });
 
 process.on('SIGTERM', () => {
-  console.log('[system] Received SIGTERM signal - shutting down gracefully...');
+  log.info('[system] Received SIGTERM signal - shutting down gracefully...');
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
-  console.log('[system] Received SIGINT signal - shutting down...');
+  log.info('[system] Received SIGINT signal - shutting down...');
   process.exit(0);
 });
 
@@ -468,7 +454,7 @@ function loadSettingsFromEnv() {
       settings[key] = result.value;
       sources[key] = `env: ${schema.envKey}`;
     } else {
-      console.log(`[init] Warning: Invalid ${schema.envKey}='${envValue}', ${result.error}.`);
+      log.debug(`[init] Warning: Invalid ${schema.envKey}='${envValue}', ${result.error}.`);
     }
   }
   // Cloud sync env vars (nested object, handled separately)
@@ -501,7 +487,7 @@ function loadSettingsFromEnv() {
         cloudSyncOverrides[field] = result.value;
         sources[`cloudSync.${field}`] = `env: ${schema.envKey}`;
       } else {
-        console.log(`[init] Warning: Invalid ${schema.envKey}='${envValue}', ${result.error}.`);
+        log.debug(`[init] Warning: Invalid ${schema.envKey}='${envValue}', ${result.error}.`);
       }
     }
   }
@@ -676,7 +662,7 @@ async function loadRuntimeSettings() {
       runtimeSettings = { ...runtimeSettings, ...fileSettings };
     } catch (e) {
       if (e.code === 'ENOENT') {
-        console.log(`[init] No settings file found at ${settingsPath}, using environment and defaults.`);
+        log.debug(`[init] No settings file found at ${settingsPath}, using environment and defaults.`);
       } else {
         throw e;
       }
@@ -698,16 +684,16 @@ async function loadRuntimeSettings() {
     }
 
     // Log final configuration with sources
-    console.log('[init] Runtime settings loaded:');
+    log.debug('[init] Runtime settings loaded:');
     for (const [key, value] of Object.entries(runtimeSettings)) {
       if (typeof value === 'object' && value !== null && !Array.isArray(value)) continue; // skip nested objects for summary logging
       const source = settingSources[key] || 'unknown';
       const displayValue = typeof value === 'string' ? `'${value}'` : value;
-      console.log(`[init]   ${key}: ${displayValue} (${source})`);
+      log.debug(`[init]   ${key}: ${displayValue} (${source})`);
     }
   } catch (error) {
-    console.error('[init] Error loading runtime settings:', error.message);
-    console.log('[init] Using environment variables and defaults due to error.');
+    log.error('[init] Error loading runtime settings:', error.message);
+    log.debug('[init] Using environment variables and defaults due to error.');
   }
 }
 
@@ -717,7 +703,7 @@ async function loadRuntimeSettings() {
 async function saveRuntimeSettings() {
   try {
     const settingsPath = '/data/runtime-settings.json';
-    console.log(`[settings] Saving settings to ${settingsPath}...`);
+    log.debug(`[settings] Saving settings to ${settingsPath}...`);
 
     await fsPromises.writeFile(settingsPath, JSON.stringify(runtimeSettings, null, 2), 'utf-8');
     try {
@@ -725,10 +711,10 @@ async function saveRuntimeSettings() {
     } catch {
       // chmod may fail on some filesystems (e.g. CIFS)
     }
-    console.log('[settings] Saved runtime-settings.json (mode: 0600)');
+    log.debug('[settings] Saved runtime-settings.json (mode: 0600)');
     settingsSavesTotal.inc();
   } catch (error) {
-    console.error('[settings] Failed to save runtime settings:', error);
+    log.error('[settings] Failed to save runtime settings:', error);
     // Don't throw, just log, so we don't crash requests
   }
 }
@@ -760,7 +746,7 @@ function redactSettings(settings) {
 function getRetentionPeriodMs() {
   const value = parseInt(runtimeSettings.retentionValue);
   const unit = runtimeSettings.retentionUnit;
-  console.log(`[retention] Calculating retention period: value=${value}, unit=${unit}`);
+  log.info(`[retention] Calculating retention period: value=${value}, unit=${unit}`);
   switch (unit) {
     case 'hours':
       return value * 60 * 60 * 1000;
@@ -806,7 +792,7 @@ async function getConfigFiles() {
   const extensions = getConfiguredExtensions();
 
   if (extensions.length === 0) {
-    console.log('[getConfigFiles] No file formats enabled, returning empty array');
+    log.info('[getConfigFiles] No file formats enabled, returning empty array');
     return [];
   }
 
@@ -861,10 +847,10 @@ async function findNestedGitRepos() {
     }
 
     if (nestedRepos.length > 0) {
-      console.log('[nested-repos] Found nested git repositories:', nestedRepos);
+      log.debug('[nested-repos] Found nested git repositories:', nestedRepos);
     }
   } catch (e) {
-    console.error('[nested-repos] Error finding nested repos:', e);
+    log.error('[nested-repos] Error finding nested repos:', e);
   }
   return nestedRepos;
 }
@@ -893,15 +879,15 @@ async function initRepo() {
         runtimeSettings.extensions.include = config.include_extensions
           .map(ext => ext.trim().replace(/^\./, '')) // Remove leading dots
           .filter(ext => ext.length > 0);
-        console.log(`[init] Include extensions from config:`, runtimeSettings.extensions.include);
+        log.debug(`[init] Include extensions from config:`, runtimeSettings.extensions.include);
       }
       if (config.exclude_files && Array.isArray(config.exclude_files)) {
         runtimeSettings.extensions.exclude = config.exclude_files
           .map(file => file.trim())
           .filter(file => file.length > 0);
-        console.log(`[init] Exclude files from config:`, runtimeSettings.extensions.exclude);
+        log.debug(`[init] Exclude files from config:`, runtimeSettings.extensions.exclude);
       }
-      console.log(`[init] Using hardcoded file format options:`, configOptions);
+      log.debug(`[init] Using hardcoded file format options:`, configOptions);
     } catch (error) {
       // Ignore if file doesn't exist
     }
@@ -914,8 +900,8 @@ async function initRepo() {
       CONFIG_PATH = '/config';
     }
 
-    console.log(`[init] CONFIG_PATH: ${CONFIG_PATH}`);
-    console.log(`[init] Current working directory: ${process.cwd()}`);
+    log.debug(`[init] CONFIG_PATH: ${CONFIG_PATH}`);
+    log.debug(`[init] Current working directory: ${process.cwd()}`);
 
     // Initialize git with the correct path
     global.CONFIG_PATH = CONFIG_PATH;
@@ -924,7 +910,7 @@ async function initRepo() {
     try {
       await fsPromises.access(CONFIG_PATH);
     } catch (error) {
-      console.log(`[init] CONFIG_PATH does not exist, creating it...`);
+      log.debug(`[init] CONFIG_PATH does not exist, creating it...`);
       await fsPromises.mkdir(CONFIG_PATH, { recursive: true });
     }
 
@@ -937,7 +923,7 @@ async function initRepo() {
     }
 
     if (!isRepo) {
-      console.log(`[init] Initializing Git repo at ${CONFIG_PATH}...`);
+      log.info(`[init] Initializing Git repo at ${CONFIG_PATH}...`);
       await gitInit();
 
       // Create .gitignore to limit git to only config files
@@ -945,23 +931,23 @@ async function initRepo() {
       const gitignoreContent = generateGitignoreContent(nestedRepos, runtimeSettings.extensions);
       try {
         await fsPromises.access(gitignorePath, fs.constants.F_OK);
-        console.log('[init] .gitignore already exists in CONFIG_PATH');
+        log.debug('[init] .gitignore already exists in CONFIG_PATH');
       } catch (error) {
-        console.log('[init] Creating .gitignore in CONFIG_PATH to limit git to config files only...');
+        log.debug('[init] Creating .gitignore in CONFIG_PATH to limit git to config files only...');
         await fsPromises.writeFile(gitignorePath, gitignoreContent, 'utf8');
-        console.log('[init] Created .gitignore in CONFIG_PATH');
+        log.debug('[init] Created .gitignore in CONFIG_PATH');
       }
 
       // Add all files - this respects the .gitignore we just created
       // Using '.' instead of explicit file list so .gitignore patterns are respected
       try {
         await gitAdd('.');
-        console.log(`[init] Added all files (respecting .gitignore patterns)`);
+        log.debug(`[init] Added all files (respecting .gitignore patterns)`);
       } catch (error) {
         if (error.message.includes('ignored') || error.message.includes('gitignore')) {
-          console.log(`[init] Some files are ignored, trying with --force flag...`);
+          log.debug(`[init] Some files are ignored, trying with --force flag...`);
           await gitAdd('.');
-          console.log(`[init] Added all files (forced)`);
+          log.debug(`[init] Added all files (forced)`);
         } else {
           throw error;
         }
@@ -973,23 +959,23 @@ async function initRepo() {
       // Create initial commit with formatted message
       const startupMessage = await generateAiCommitMessage(formatCommitMessage(status));
       await gitCommit(startupMessage);
-      console.log('Initialized Git repo with startup backup');
-      console.log(`[log] ════════════════════════════════════════════════════`);
-      console.log(`[log] Initial commit created (first backup)`);
-      console.log(`[log] Message: ${startupMessage}`);
-      console.log(`[log] Files: ${status.files.length}`);
-      console.log(`[log] ════════════════════════════════════════════════════`);
+      log.info('Initialized Git repo with startup backup');
+      log.info(`[log] ════════════════════════════════════════════════════`);
+      log.info(`[log] Initial commit created (first backup)`);
+      log.info(`[log] Message: ${startupMessage}`);
+      log.info(`[log] Files: ${status.files.length}`);
+      log.info(`[log] ════════════════════════════════════════════════════`);
     } else {
-      console.log('Using existing Git repo');
+      log.info('Using existing Git repo');
     }
 
     // Test write access
     try {
       await fsPromises.access(CONFIG_PATH, fs.constants.W_OK);
-      console.log(`[init] Write access confirmed for ${CONFIG_PATH}`);
+      log.debug(`[init] Write access confirmed for ${CONFIG_PATH}`);
     } catch (error) {
-      console.error(`[init] No write access to ${CONFIG_PATH}!`);
-      console.error('[init] This is a critical error - the addon will not be able to commit changes');
+      log.error(`[init] No write access to ${CONFIG_PATH}!`);
+      log.error('[init] This is a critical error - the addon will not be able to commit changes');
       throw new Error(`No write permission to CONFIG_PATH: ${CONFIG_PATH}`);
     }
 
@@ -1001,54 +987,54 @@ async function initRepo() {
         await fsPromises.access(gitignorePath, fs.constants.F_OK);
 
         // Always update .gitignore to ensure extensions from config are applied
-        console.log('[init] Updating .gitignore with configured extensions...');
+        log.debug('[init] Updating .gitignore with configured extensions...');
         const existingContent = await fsPromises.readFile(gitignorePath, 'utf8');
         const newContent = generateGitignoreContent(nestedRepos, runtimeSettings.extensions);
 
         // Only update if content actually changed
         if (existingContent.trim() !== newContent.trim()) {
           await fsPromises.writeFile(gitignorePath, newContent, 'utf8');
-          console.log('[init] Updated .gitignore with extensions:', runtimeSettings.extensions);
+          log.debug('[init] Updated .gitignore with extensions:', runtimeSettings.extensions);
         } else {
-          console.log('[init] .gitignore already up to date');
+          log.debug('[init] .gitignore already up to date');
         }
       } catch (error) {
         // .gitignore doesn't exist, create default one
-        console.log('[init] Creating default .gitignore in CONFIG_PATH...');
+        log.debug('[init] Creating default .gitignore in CONFIG_PATH...');
         const gitignoreContent = generateGitignoreContent(nestedRepos, runtimeSettings.extensions);
         await fsPromises.writeFile(gitignorePath, gitignoreContent, 'utf8');
-        console.log('[init] Created .gitignore in CONFIG_PATH');
+        log.debug('[init] Created .gitignore in CONFIG_PATH');
       }
     }
 
     // Clean up nested repos from index BEFORE doing git add
     // This prevents them from being re-committed in the startup backup
     if (nestedRepos.length > 0) {
-      console.log('[init] Cleaning up nested git repositories from index...');
+      log.debug('[init] Cleaning up nested git repositories from index...');
       for (const repoPath of nestedRepos) {
         // Ensure path uses forward slashes for git command
         const gitPath = repoPath.replace(/\\/g, '/');
         const removed = await gitRmCached(gitPath);
         if (removed) {
-          console.log(`[init] Removed nested git repo from index (cached only): ${gitPath}`);
+          log.debug(`[init] Removed nested git repo from index (cached only): ${gitPath}`);
         }
       }
     }
 
     // Create a startup commit to backup current state (only for existing repos)
     if (isRepo) {
-      console.log('[init] Creating startup backup commit for existing repository...');
+      log.debug('[init] Creating startup backup commit for existing repository...');
 
       // Add all files - this respects the .gitignore patterns
       // Using '.' instead of explicit file list so .gitignore is respected
       try {
         await gitAdd('.');
-        console.log(`[init] Added all files (respecting .gitignore patterns)`);
+        log.debug(`[init] Added all files (respecting .gitignore patterns)`);
       } catch (error) {
         if (error.message.includes('ignored') || error.message.includes('gitignore')) {
-          console.log(`[init] Some files are ignored, trying with --force flag...`);
+          log.debug(`[init] Some files are ignored, trying with --force flag...`);
           await gitAdd('.');
-          console.log(`[init] Added all files (forced)`);
+          log.debug(`[init] Added all files (forced)`);
         } else {
           throw error;
         }
@@ -1057,40 +1043,40 @@ async function initRepo() {
       // After git add, unstage any nested repos to prevent them from being committed
       // This handles both re-additions (as submodules) and deletions staged by git rm --cached
       if (nestedRepos.length > 0) {
-        console.log('[init] Unstaging nested git repositories after git add...');
+        log.debug('[init] Unstaging nested git repositories after git add...');
         for (const repoPath of nestedRepos) {
           const gitPath = repoPath.replace(/\\/g, '/');
           await gitResetHead(gitPath);
-          console.log(`[init] Unstaged nested repo: ${gitPath}`);
+          log.debug(`[init] Unstaged nested repo: ${gitPath}`);
         }
       }
 
       // Check if there are any changes first
       const status = await gitStatus();
-      console.log(`[init] Git status - isClean: ${status.isClean()}`);
+      log.debug(`[init] Git status - isClean: ${status.isClean()}`);
 
       if (!status.isClean()) {
         // Non-empty commit - show file count or filename
         const startupMessage = await generateAiCommitMessage(formatCommitMessage(status));
         await gitCommit(startupMessage);
-        console.log(`[init] Created startup backup commit with ${status.files.length} files`);
-        console.log(`[log] ════════════════════════════════════════════════════`);
-        console.log(`[log] Startup backup commit created`);
-        console.log(`[log] Message: ${startupMessage}`);
-        console.log(`[log] Files: ${status.files.length}`);
-        console.log(`[log] ════════════════════════════════════════════════════`);
+        log.info(`[init] Created startup backup commit with ${status.files.length} files`);
+        log.info(`[log] ════════════════════════════════════════════════════`);
+        log.info(`[log] Startup backup commit created`);
+        log.info(`[log] Message: ${startupMessage}`);
+        log.info(`[log] Files: ${status.files.length}`);
+        log.info(`[log] ════════════════════════════════════════════════════`);
       } else {
         // No changes - don't create empty commit (wastes retention space)
-        console.log(`[init] No changes detected - skipping empty baseline commit`);
-        console.log(`[init] Repository is ready (empty baseline commits are disabled to save retention space)`);
+        log.debug(`[init] No changes detected - skipping empty baseline commit`);
+        log.debug(`[init] Repository is ready (empty baseline commits are disabled to save retention space)`);
       }
     } else {
-      console.log('[init] No changes to backup for existing repository');
+      log.info('[init] No changes to backup for existing repository');
     }
 
     gitInitialized = true;
   } catch (error) {
-    console.error('Git init error:', error);
+    log.error('Git init error:', error);
     // Don't fail hard, continue starting the server
   }
 }
@@ -1117,7 +1103,7 @@ app.get('/api/runtime-settings', async (req, res) => {
       settings: redactSettings(runtimeSettings)
     });
   } catch (error) {
-    console.error('[runtime-settings] Error:', error);
+    log.error('[runtime-settings] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1179,9 +1165,9 @@ app.post('/api/runtime-settings', async (req, res) => {
         const gitignorePath = path.join(CONFIG_PATH, '.gitignore');
         const newContent = generateGitignoreContent(IGNORED_NESTED_REPOS, runtimeSettings.extensions);
         await fsPromises.writeFile(gitignorePath, newContent, 'utf8');
-        console.log('[settings] Updated .gitignore with new extensions');
+        log.debug('[settings] Updated .gitignore with new extensions');
       } catch (error) {
-        console.error('[settings] Failed to update .gitignore:', error);
+        log.error('[settings] Failed to update .gitignore:', error);
       }
     }
 
@@ -1193,7 +1179,7 @@ app.post('/api/runtime-settings', async (req, res) => {
       settings: redactSettings(runtimeSettings)
     });
   } catch (error) {
-    console.error('[runtime-settings] Error:', error);
+    log.error('[runtime-settings] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1206,7 +1192,7 @@ app.get('/api/files', async (req, res) => {
       try {
         entries = await fsPromises.readdir(dir, { withFileTypes: true });
       } catch (err) {
-        console.error(`[walkDir] Error reading directory ${dir}:`, err.message);
+        log.debug(`[walkDir] Error reading directory ${dir}:`, err.message);
         return []; // Return empty array for this directory and stop recursion
       }
 
@@ -1263,7 +1249,7 @@ app.get('/api/files', async (req, res) => {
 app.get('/api/files/deleted', async (req, res) => {
   try {
     ensureGitInitialized();
-    console.log('[deleted-files] Scanning git history for deleted files...');
+    log.debug('[deleted-files] Scanning git history for deleted files...');
 
     // Get all files currently on disk (returns absolute paths)
     const currentFiles = await getConfigFiles();
@@ -1310,7 +1296,7 @@ app.get('/api/files/deleted', async (req, res) => {
           }
         } catch (e) {
           // File might not have proper history, skip it
-          console.log(`[deleted-files] Could not get history for ${filePath}:`, e.message);
+          log.debug(`[deleted-files] Could not get history for ${filePath}:`, e.message);
         }
       }
     }
@@ -1318,10 +1304,10 @@ app.get('/api/files/deleted', async (req, res) => {
     // Sort by last seen date (most recent first)
     deletedFiles.sort((a, b) => new Date(b.lastSeenDate) - new Date(a.lastSeenDate));
 
-    console.log(`[deleted-files] Found ${deletedFiles.length} deleted files`);
+    log.debug(`[deleted-files] Found ${deletedFiles.length} deleted files`);
     res.json({ success: true, files: deletedFiles });
   } catch (error) {
-    console.error('[deleted-files] Error:', error);
+    log.error('[deleted-files] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1330,7 +1316,7 @@ app.get('/api/files/deleted', async (req, res) => {
 app.get('/api/automations/deleted', async (req, res) => {
   try {
     ensureGitInitialized();
-    console.log('[deleted-automations] Scanning git history for deleted automations...');
+    log.debug('[deleted-automations] Scanning git history for deleted automations...');
 
     // Get current automations
     const currentAutomations = await extractAutomations(CONFIG_PATH);
@@ -1422,7 +1408,7 @@ app.get('/api/automations/deleted', async (req, res) => {
           }
         }
       } catch (e) {
-        console.log(`[deleted-automations] Error scanning ${relPath}:`, e.message);
+        log.debug(`[deleted-automations] Error scanning ${relPath}:`, e.message);
       }
     }
 
@@ -1430,10 +1416,10 @@ app.get('/api/automations/deleted', async (req, res) => {
     const deletedAutomations = Array.from(allAutomationIds.values());
     deletedAutomations.sort((a, b) => new Date(b.lastSeenDate) - new Date(a.lastSeenDate));
 
-    console.log(`[deleted-automations] Found ${deletedAutomations.length} deleted automations`);
+    log.debug(`[deleted-automations] Found ${deletedAutomations.length} deleted automations`);
     res.json({ success: true, automations: deletedAutomations });
   } catch (error) {
-    console.error('[deleted-automations] Error:', error);
+    log.error('[deleted-automations] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1442,7 +1428,7 @@ app.get('/api/automations/deleted', async (req, res) => {
 app.get('/api/scripts/deleted', async (req, res) => {
   try {
     ensureGitInitialized();
-    console.log('[deleted-scripts] Scanning git history for deleted scripts...');
+    log.debug('[deleted-scripts] Scanning git history for deleted scripts...');
 
     // Get current scripts
     const currentScripts = await extractScripts(CONFIG_PATH);
@@ -1524,7 +1510,7 @@ app.get('/api/scripts/deleted', async (req, res) => {
           }
         }
       } catch (e) {
-        console.log(`[deleted-scripts] Error scanning ${relPath}:`, e.message);
+        log.debug(`[deleted-scripts] Error scanning ${relPath}:`, e.message);
       }
     }
 
@@ -1532,10 +1518,10 @@ app.get('/api/scripts/deleted', async (req, res) => {
     const deletedScripts = Array.from(allScriptIds.values());
     deletedScripts.sort((a, b) => new Date(b.lastSeenDate) - new Date(a.lastSeenDate));
 
-    console.log(`[deleted-scripts] Found ${deletedScripts.length} deleted scripts`);
+    log.debug(`[deleted-scripts] Found ${deletedScripts.length} deleted scripts`);
     res.json({ success: true, scripts: deletedScripts });
   } catch (error) {
-    console.error('[deleted-scripts] Error:', error);
+    log.error('[deleted-scripts] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1568,21 +1554,21 @@ app.get('/api/git/commit-details', async (req, res) => {
 app.post('/api/git/add-all-and-commit', async (req, res) => {
   try {
     ensureGitInitialized();
-    console.log('[add-all-and-commit] Adding all config files and committing...');
+    log.debug('[add-all-and-commit] Adding all config files and committing...');
     const configFiles = await getConfigFiles();
-    console.log(`[add-all-and-commit] Found ${configFiles.length} config files to add`);
+    log.debug(`[add-all-and-commit] Found ${configFiles.length} config files to add`);
     await gitAdd(configFiles);
     const status = await gitStatus();
     if (status.isClean()) {
-      console.log('[add-all-and-commit] No changes to commit.');
+      log.info('[add-all-and-commit] No changes to commit.');
       return res.json({ success: true, message: 'No changes to commit.' });
     }
     const commitMessage = 'Manual commit: Add all config files and stage changes';
     await gitCommit(commitMessage);
-    console.log(`[add-all-and-commit] Committed: ${commitMessage}`);
+    log.info(`[add-all-and-commit] Committed: ${commitMessage}`);
     res.json({ success: true, message: `All ${configFiles.length} config files added and committed.` });
   } catch (error) {
-    console.error('[add-all-and-commit] Error:', error);
+    log.error('[add-all-and-commit] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1647,7 +1633,7 @@ app.get('/api/git/file-history', async (req, res) => {
         const blobHash = match ? match[1] : null;
         return { ...commit, blobHash };
       } catch (e) {
-        console.error(`Error getting blob hash for ${commit.hash}:`, e.message);
+        log.error(`Error getting blob hash for ${commit.hash}:`, e.message);
         return { ...commit, blobHash: null };
       }
     }));
@@ -1697,7 +1683,7 @@ app.post('/api/restore-file', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid commit hash' });
     }
     safePath(CONFIG_PATH, filePath);
-    console.log(`[restore] Restoring file ${filePath} to commit ${commitHash.substring(0, 8)}`);
+    log.info(`[restore] Restoring file ${filePath} to commit ${commitHash.substring(0, 8)}`);
 
     // Get the date from the commit for the commit message
     // Get the date from the commit for the commit message
@@ -1706,14 +1692,14 @@ app.post('/api/restore-file', async (req, res) => {
 
     // Restore the file - file watcher will detect and auto-commit
     await gitCheckoutSafe(commitHash, filePath);
-    console.log(`[restore] File restored: ${filePath}`);
-    console.log(`[restore] File watcher will auto-commit this change`);
+    log.info(`[restore] File restored: ${filePath}`);
+    log.debug(`[restore] File watcher will auto-commit this change`);
 
     let message = 'File restored (auto-commit pending)';
 
     // Check if we need to reload Home Assistant components
     if (filePath.endsWith('automations.yaml')) {
-      console.log('[restore] Reloading automations in Home Assistant...');
+      log.info('[restore] Reloading automations in Home Assistant...');
       const reloadResult = await callHomeAssistantService('automation', 'reload');
       if (reloadResult.success) {
         message += '. Automations reloaded.';
@@ -1721,7 +1707,7 @@ app.post('/api/restore-file', async (req, res) => {
         message += `. Automations reload failed: ${reloadResult.error}`;
       }
     } else if (filePath.endsWith('scripts.yaml')) {
-      console.log('[restore] Reloading scripts in Home Assistant...');
+      log.info('[restore] Reloading scripts in Home Assistant...');
       const reloadResult = await callHomeAssistantService('script', 'reload');
       if (reloadResult.success) {
         message += '. Scripts reloaded.';
@@ -1732,7 +1718,7 @@ app.post('/api/restore-file', async (req, res) => {
 
     res.json({ success: true, message, reloaded: message.includes('reloaded') });
   } catch (error) {
-    console.error('[restore] Error:', error);
+    log.error('[restore] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1753,12 +1739,12 @@ app.post('/api/restore-commit', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid commit hash' });
     }
 
-    console.log(`[restore] Finding files from commit ${source.substring(0, 8)}`);
-    console.log(`[restore] Restoring to version ${target.substring(0, 8)}`);
+    log.debug(`[restore] Finding files from commit ${source.substring(0, 8)}`);
+    log.debug(`[restore] Restoring to version ${target.substring(0, 8)}`);
 
     // Get the list of files in the SOURCE commit using git show (files that were changed)
     const status = await gitRaw(['show', `${source}`, '--name-status', '--pretty=format:']);
-    console.log(`[restore] Git show output:`, status);
+    log.debug(`[restore] Git show output:`, status);
 
     // Parse the output - each line is like "M\tfilename" or "A\tfilename"
     const lines = status.split('\n').filter(line => line.trim());
@@ -1767,7 +1753,7 @@ app.post('/api/restore-commit', async (req, res) => {
       return parts[1]; // Second column is the filename
     }).filter(f => f);
 
-    console.log(`[restore] Found ${files.length} files from source commit:`, files);
+    log.debug(`[restore] Found ${files.length} files from source commit:`, files);
 
     // Filter to only include config files based on configured extensions
     const allowedExtensions = getConfiguredExtensions();
@@ -1780,16 +1766,16 @@ app.post('/api/restore-commit', async (req, res) => {
     });
 
     if (configFiles.length !== files.length) {
-      console.log(`[restore] Filtered to ${configFiles.length} config files (from ${files.length} total)`);
+      log.debug(`[restore] Filtered to ${configFiles.length} config files (from ${files.length} total)`);
     }
 
     // If no config files found, try alternative method
     if (configFiles.length === 0) {
-      console.log('[restore] No config files found with git show, trying git diff...');
+      log.debug('[restore] No config files found with git show, trying git diff...');
       // As a fallback, get files changed in source commit vs its parent
       const diff = await gitDiff([`${source}^`, source, '--name-only']);
       const altFiles = diff.split('\n').filter(line => line.trim());
-      console.log(`[restore] Found ${altFiles.length} files using diff:`, altFiles);
+      log.debug(`[restore] Found ${altFiles.length} files using diff:`, altFiles);
 
       // Filter these files too
       const filteredAltFiles = altFiles.filter(file => {
@@ -1801,7 +1787,7 @@ app.post('/api/restore-commit', async (req, res) => {
       });
 
       configFiles.push(...filteredAltFiles);
-      console.log(`[restore] Filtered to ${filteredAltFiles.length} config files from diff`);
+      log.debug(`[restore] Filtered to ${filteredAltFiles.length} config files from diff`);
     }
 
     // Update files to the filtered list
@@ -1810,12 +1796,12 @@ app.post('/api/restore-commit', async (req, res) => {
 
     // Restore each file to TARGET version - file watcher will detect and auto-commit all changes
     for (const file of files) {
-      console.log(`[restore] Restoring ${file} to version ${target.substring(0, 8)}`);
+      log.info(`[restore] Restoring ${file} to version ${target.substring(0, 8)}`);
       await gitCheckoutSafe(target, file);
     }
 
-    console.log(`[restore] All files restored (${files.length} files)`);
-    console.log(`[restore] File watcher will auto-commit these changes`);
+    log.info(`[restore] All files restored (${files.length} files)`);
+    log.debug(`[restore] File watcher will auto-commit these changes`);
 
     // Check if we need to reload automations or scripts in Home Assistant
     const needsAutomationReload = files.some(f => f.toLowerCase().includes('automations.yaml') || f.toLowerCase().includes('automations.yml'));
@@ -1825,13 +1811,13 @@ app.post('/api/restore-commit', async (req, res) => {
     let scriptReloaded = false;
 
     if (needsAutomationReload) {
-      console.log('[restore] Reloading automations in Home Assistant...');
+      log.info('[restore] Reloading automations in Home Assistant...');
       const reloadResult = await callHomeAssistantService('automation', 'reload');
       automationReloaded = reloadResult.success;
     }
 
     if (needsScriptReload) {
-      console.log('[restore] Reloading scripts in Home Assistant...');
+      log.info('[restore] Reloading scripts in Home Assistant...');
       const reloadResult = await callHomeAssistantService('script', 'reload');
       scriptReloaded = reloadResult.success;
     }
@@ -1847,7 +1833,7 @@ app.post('/api/restore-commit', async (req, res) => {
       scriptReloaded
     });
   } catch (error) {
-    console.error('[restore] Error:', error);
+    log.error('[restore] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1861,7 +1847,7 @@ app.post('/api/git/hard-reset', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid commit hash' });
     }
 
-    console.log(`[hard-reset] Resetting ALL files to commit ${commitHash.substring(0, 8)}`);
+    log.info(`[hard-reset] Resetting ALL files to commit ${commitHash.substring(0, 8)}`);
 
     // 1. Validate commit exists
     let commitExists;
@@ -1885,7 +1871,7 @@ app.post('/api/git/hard-reset', async (req, res) => {
 
     // 2. Create safety backup if requested
     if (createBackup) {
-      console.log('[hard-reset] Creating safety backup commit...');
+      log.info('[hard-reset] Creating safety backup commit...');
       try {
         // Stage all current changes
         await gitAdd('.');
@@ -1901,12 +1887,12 @@ app.post('/api/git/hard-reset', async (req, res) => {
           // Get the backup commit hash
           const hashResult = await gitRaw(['rev-parse', 'HEAD']);
           backupHash = hashResult.trim();
-          console.log(`[hard-reset] Safety backup created at ${backupHash.substring(0, 8)}`);
+          log.info(`[hard-reset] Safety backup created at ${backupHash.substring(0, 8)}`);
         } else {
-          console.log('[hard-reset] No changes to backup (working directory clean)');
+          log.info('[hard-reset] No changes to backup (working directory clean)');
         }
       } catch (error) {
-        console.error('[hard-reset] Backup creation failed:', error);
+        log.error('[hard-reset] Backup creation failed:', error);
         return res.status(500).json({
           success: false,
           error: `Failed to create safety backup: ${error.message}`
@@ -1915,15 +1901,15 @@ app.post('/api/git/hard-reset', async (req, res) => {
     }
 
     // 3. Get list of all files in the target commit
-    console.log(`[hard-reset] Getting file list from commit ${commitHash.substring(0, 8)}`);
+    log.debug(`[hard-reset] Getting file list from commit ${commitHash.substring(0, 8)}`);
     let filesInCommit;
     try {
       // Use git ls-tree to get all files in the commit
       const lsTree = await gitRaw(['ls-tree', '-r', '--name-only', commitHash]);
       filesInCommit = lsTree.trim().split('\n').filter(f => f);
-      console.log(`[hard-reset] Found ${filesInCommit.length} files in target commit`);
+      log.debug(`[hard-reset] Found ${filesInCommit.length} files in target commit`);
     } catch (error) {
-      console.error('[hard-reset] Failed to get file list:', error);
+      log.error('[hard-reset] Failed to get file list:', error);
       return res.status(500).json({
         success: false,
         error: `Failed to get files from commit: ${error.message}`
@@ -1931,13 +1917,13 @@ app.post('/api/git/hard-reset', async (req, res) => {
     }
 
     // 4. Checkout each file from the target commit
-    console.log(`[hard-reset] Checking out ${filesInCommit.length} files from ${commitHash.substring(0, 8)}`);
+    log.debug(`[hard-reset] Checking out ${filesInCommit.length} files from ${commitHash.substring(0, 8)}`);
     try {
       // Checkout all files
       for (const file of filesInCommit) {
         await gitCheckoutSafe(commitHash, file);
       }
-      console.log(`[hard-reset] All files checked out from ${commitHash.substring(0, 8)}`);
+      log.debug(`[hard-reset] All files checked out from ${commitHash.substring(0, 8)}`);
 
       // Get the commit date for a better commit message
       let commitDate = '';
@@ -1958,7 +1944,7 @@ app.post('/api/git/hard-reset', async (req, res) => {
         });
         commitDate = `${datePart} ${timePart}`;
       } catch (error) {
-        console.error('[hard-reset] Failed to get commit date:', error);
+        log.error('[hard-reset] Failed to get commit date:', error);
         commitDate = commitHash.substring(0, 8);
       }
 
@@ -1968,7 +1954,7 @@ app.post('/api/git/hard-reset', async (req, res) => {
       if (!statusAfter.isClean()) {
         const resetMessage = `Restored all files to ${commitDate}`;
         await gitCommit(resetMessage);
-        console.log(`[hard-reset] Committed restored files`);
+        log.debug(`[hard-reset] Committed restored files`);
       }
 
       res.json({
@@ -1979,7 +1965,7 @@ app.post('/api/git/hard-reset', async (req, res) => {
         message: `Restored ${filesInCommit.length} files to commit ${commitHash.substring(0, 8)}${backupHash ? '. Safety backup created.' : ''}`
       });
     } catch (error) {
-      console.error('[hard-reset] Checkout failed:', error);
+      log.error('[hard-reset] Checkout failed:', error);
       res.status(500).json({
         success: false,
         error: `File restoration failed: ${error.message}`
@@ -1987,7 +1973,7 @@ app.post('/api/git/hard-reset', async (req, res) => {
     }
 
   } catch (error) {
-    console.error('[hard-reset] Error:', error);
+    log.error('[hard-reset] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -2001,7 +1987,7 @@ app.post('/api/git/soft-reset', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid commit hash' });
     }
 
-    console.log(`[soft-reset] Soft resetting to commit ${commitHash.substring(0, 8)}`);
+    log.info(`[soft-reset] Soft resetting to commit ${commitHash.substring(0, 8)}`);
 
     // 1. Validate commit exists
     let commitExists;
@@ -2028,33 +2014,33 @@ app.post('/api/git/soft-reset', async (req, res) => {
       commitsToRemove = logOutput.trim().split('\n').filter(l => l).length;
     } catch (error) {
       // If this fails, we can still proceed
-      console.log('[soft-reset] Could not count commits to remove:', error.message);
+      log.debug('[soft-reset] Could not count commits to remove:', error.message);
     }
 
     // 3. Perform soft reset
     try {
       // Log current HEAD before reset
       const headBefore = (await gitRaw(['rev-parse', 'HEAD'])).trim();
-      console.log(`[soft-reset] HEAD before reset: ${headBefore.substring(0, 8)}`);
+      log.debug(`[soft-reset] HEAD before reset: ${headBefore.substring(0, 8)}`);
 
       await gitRaw(['reset', '--soft', commitHash]);
-      console.log(`[soft-reset] Executed git reset --soft to ${commitHash.substring(0, 8)}`);
+      log.debug(`[soft-reset] Executed git reset --soft to ${commitHash.substring(0, 8)}`);
 
       // Verify HEAD actually changed
       const headAfter = (await gitRaw(['rev-parse', 'HEAD'])).trim();
-      console.log(`[soft-reset] HEAD after reset: ${headAfter.substring(0, 8)}`);
+      log.debug(`[soft-reset] HEAD after reset: ${headAfter.substring(0, 8)}`);
 
       if (headBefore === headAfter) {
-        console.error('[soft-reset] WARNING: HEAD did not change!');
+        log.error('[soft-reset] WARNING: HEAD did not change!');
       }
 
       // 4. Unstage all changes so file watcher doesn't immediately re-commit them
       // Soft reset stages all the changes from removed commits, which the file watcher 
       // would pick up and commit again. We need to unstage them.
       await gitRaw(['reset']);
-      console.log('[soft-reset] Unstaged changes to prevent auto-re-commit');
+      log.debug('[soft-reset] Unstaged changes to prevent auto-re-commit');
     } catch (error) {
-      console.error('[soft-reset] Reset failed:', error);
+      log.error('[soft-reset] Reset failed:', error);
       return res.status(500).json({
         success: false,
         error: `Soft reset failed: ${error.message}`
@@ -2090,7 +2076,7 @@ app.post('/api/git/soft-reset', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[soft-reset] Error:', error);
+    log.error('[soft-reset] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -2137,7 +2123,7 @@ const debounceTimers = new Map();
 let watcher = null;
 
 function initializeWatcher() {
-  console.log(`[init] Setting up file watcher for: ${CONFIG_PATH}/**/*`);
+  log.info(`[init] Setting up file watcher for: ${CONFIG_PATH}/**/*`);
 
   // Watch all files - let git's .gitignore handle filtering
   const watchPattern = `${CONFIG_PATH}/**/*`;
@@ -2199,7 +2185,7 @@ function initializeWatcher() {
   // Handler function for both 'change' and 'add' events
   const handleFileEvent = async (filePath, eventType) => {
     const relativePath = filePath.replace(CONFIG_PATH + '/', '');
-    console.log(`[watcher] File ${eventType}: ${relativePath}`);
+    log.debug(`[watcher] File ${eventType}: ${relativePath}`);
 
     // Clear any existing timer for this specific file
     if (debounceTimers.has(filePath)) {
@@ -2211,7 +2197,7 @@ function initializeWatcher() {
       try {
         // Ensure git is initialized
         if (!gitInitialized) {
-          console.log('[watcher] Git not initialized yet, retrying...');
+          log.debug('[watcher] Git not initialized yet, retrying...');
           await initRepo();
         }
 
@@ -2225,13 +2211,13 @@ function initializeWatcher() {
         await gitRaw(['reset']);
 
         // Use git add . to stage all changes - git will respect user's .gitignore
-        console.log(`[watcher] Triggered by: ${relativePath}, running git add .`);
+        log.debug(`[watcher] Triggered by: ${relativePath}, running git add .`);
         await gitAdd('.');
 
         // Check if there are actually changes to commit
         const status = await gitStatus();
         if (status.isClean()) {
-          console.log(`[watcher] No changes to commit (repo is clean per .gitignore)`);
+          log.debug(`[watcher] No changes to commit (repo is clean per .gitignore)`);
           debounceTimers.delete(filePath);
           return;
         }
@@ -2241,11 +2227,11 @@ function initializeWatcher() {
           .filter(f => f.index !== ' ' && f.index !== '?')
           .map(f => f.path.trim());
 
-        console.log(`[watcher] Staged files (respecting .gitignore): ${stagedFiles.join(', ')} (${stagedFiles.length} file(s))`);
+        log.debug(`[watcher] Staged files (respecting .gitignore): ${stagedFiles.join(', ')} (${stagedFiles.length} file(s))`);
 
         // Safety check: if no valid files to commit, clean up and return
         if (stagedFiles.length === 0) {
-          console.log(`[watcher] No staged files to commit`);
+          log.debug(`[watcher] No staged files to commit`);
           await gitRaw(['reset']);
           debounceTimers.delete(filePath);
           return;
@@ -2262,9 +2248,9 @@ function initializeWatcher() {
         }
 
         const commitMessage = await generateAiCommitMessage(fallbackMessage);
-        console.log(`[watcher] Committing: ${commitMessage} (${stagedFiles.length} file(s))`);
+        log.info(`[watcher] Committing: ${commitMessage} (${stagedFiles.length} file(s))`);
         await gitCommit(commitMessage);
-        console.log(`Committed: ${commitMessage}`);
+        log.info(`Committed: ${commitMessage}`);
         autoCommitsTotal.inc();
 
         // Collect diff stats for metrics
@@ -2280,7 +2266,7 @@ function initializeWatcher() {
 
         // Run retention cleanup if enabled
         if (runtimeSettings.historyRetention) {
-          console.log('[watcher] Running retention cleanup after commit...');
+          log.debug('[watcher] Running retention cleanup after commit...');
           await runRetentionCleanup();
         }
 
@@ -2288,12 +2274,12 @@ function initializeWatcher() {
         if (runtimeSettings.cloudSync.enabled &&
           runtimeSettings.cloudSync.pushFrequency === 'every_commit' &&
           runtimeSettings.cloudSync.remoteUrl) {
-          console.log('[watcher] Running cloud sync push after commit...');
+          log.debug('[watcher] Running cloud sync push after commit...');
           try {
             await setupGitRemote(runtimeSettings.cloudSync.remoteUrl, runtimeSettings.cloudSync.authToken, runtimeSettings.cloudSync.authUser);
             await pushToRemote(runtimeSettings.cloudSync.includeSecrets);
           } catch (e) {
-            console.error('[watcher] Cloud sync push failed:', e.message);
+            log.error('[watcher] Cloud sync push failed:', e.message);
           }
         }
 
@@ -2302,10 +2288,10 @@ function initializeWatcher() {
       } catch (error) {
         // Only log actual errors, not "nothing to commit" errors
         if (error.message && !error.message.includes('nothing to commit')) {
-          console.error('[watcher] Auto-commit failed:', error.message);
+          log.error('[watcher] Auto-commit failed:', error.message);
           if (error.message.includes('Permission denied')) {
-            console.error('[watcher] Permission denied - is the container running as root?');
-            console.error('[watcher] The havc user needs write access to /config directory');
+            log.error('[watcher] Permission denied - is the container running as root?');
+            log.error('[watcher] The havc user needs write access to /config directory');
           }
         }
         // Clean up the timer reference even on error
@@ -2337,11 +2323,11 @@ function initializeWatcher() {
 
   watcher.on('ready', () => {
     fileWatcherActive.set(1);
-    console.log('[init] File watcher ready and watching for changes');
+    log.info('[init] File watcher ready and watching for changes');
   });
 
   watcher.on('error', error => {
-    console.error('[watcher] Error:', error);
+    log.error('[watcher] Error:', error);
   });
 }
 
@@ -2364,7 +2350,7 @@ app.get('/api/health', (req, res) => {
 // Advanced retention cleanup with custom parameters
 app.post('/api/retention/cleanup', async (req, res) => {
   try {
-    console.log('[api] Advanced retention cleanup triggered with options:', req.body);
+    log.info('[api] Advanced retention cleanup triggered with options:', req.body);
 
     // Validate options
     const options = req.body || {};
@@ -2374,8 +2360,8 @@ app.post('/api/retention/cleanup', async (req, res) => {
 
     // Run cleanup in background
     cleanupHistoryOrphanMethod(options)
-      .then(result => console.log('[api] Advanced cleanup completed:', result))
-      .catch(err => console.error('[api] Advanced cleanup failed:', err));
+      .then(result => log.info('[api] Advanced cleanup completed:', result))
+      .catch(err => log.error('[api] Advanced cleanup failed:', err));
 
     res.json({ success: true, message: 'Cleanup started in background' });
   } catch (error) {
@@ -2386,9 +2372,9 @@ app.post('/api/retention/cleanup', async (req, res) => {
 // Manual retention cleanup
 app.post('/api/run-retention', async (req, res) => {
   try {
-    console.log('[api] Manual retention cleanup triggered');
+    log.info('[api] Manual retention cleanup triggered');
     // Run cleanup in background to avoid timeout
-    runRetentionCleanup(true).catch(err => console.error('[api] Background cleanup failed:', err));
+    runRetentionCleanup(true).catch(err => log.error('[api] Background cleanup failed:', err));
     res.json({ success: true, message: 'Cleanup started in background' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -2406,7 +2392,7 @@ async function runRetentionCleanup(force = false) {
   }
 
   const cleanupId = Date.now().toString().substring(8);
-  console.log(`[retention-${cleanupId}] Running automatic cleanup...`);
+  log.info(`[retention-${cleanupId}] Running automatic cleanup...`);
 
 
   try {
@@ -2434,13 +2420,13 @@ async function runRetentionCleanup(force = false) {
         options.days = 1;
       }
 
-      console.log(`[retention-${cleanupId}] Time-based cleanup with options:`, options);
+      log.debug(`[retention-${cleanupId}] Time-based cleanup with options:`, options);
     } else if (runtimeSettings.retentionType === 'versions') {
       // For versions-based, we need to calculate how many days back to go
       // This is a limitation - we'll convert it to a time-based approach
       // by looking at the Nth commit and using its date
-      console.log(`[retention-${cleanupId}] Versions-based retention not directly supported by cleanup API`);
-      console.log(`[retention-${cleanupId}] Converting to time-based by examining commit dates...`);
+      log.debug(`[retention-${cleanupId}] Versions-based retention not directly supported by cleanup API`);
+      log.debug(`[retention-${cleanupId}] Converting to time-based by examining commit dates...`);
 
       const retentionValue = parseInt(runtimeSettings.retentionValue);
       const log = await getLightweightGitLog();
@@ -2460,9 +2446,9 @@ async function runRetentionCleanup(force = false) {
         if (hours > 0) options.hours = hours;
         if (minutes > 0) options.minutes = minutes;
 
-        console.log(`[retention-${cleanupId}] Keeping ${retentionValue} commits = keeping last ${days}d ${hours}h ${minutes}m`);
+        log.debug(`[retention-${cleanupId}] Keeping ${retentionValue} commits = keeping last ${days}d ${hours}h ${minutes}m`);
       } else {
-        console.log(`[retention-${cleanupId}] Only ${log.all.length} commits exist, wanted to keep ${retentionValue}. No cleanup needed.`);
+        log.debug(`[retention-${cleanupId}] Only ${log.all.length} commits exist, wanted to keep ${retentionValue}. No cleanup needed.`);
         return;
       }
     }
@@ -2473,8 +2459,8 @@ async function runRetentionCleanup(force = false) {
     const cleanupDuration = (Date.now() - cleanupStart) / 1000;
 
     if (result.success) {
-      console.log(`[retention-${cleanupId}] Cleanup successful: ${result.message}`);
-      console.log(`[retention-${cleanupId}] Merged: ${result.commitsMerged}, Kept: ${result.commitsKept}, Total: ${result.totalCommits}`);
+      log.info(`[retention-${cleanupId}] Cleanup successful: ${result.message}`);
+      log.debug(`[retention-${cleanupId}] Merged: ${result.commitsMerged}, Kept: ${result.commitsKept}, Total: ${result.totalCommits}`);
       retentionCleanupTotal.inc({ status: 'success' });
     } else {
       retentionCleanupTotal.inc({ status: 'failure' });
@@ -2482,7 +2468,7 @@ async function runRetentionCleanup(force = false) {
     retentionCleanupDuration.observe(cleanupDuration);
 
   } catch (error) {
-    console.error(`[retention-${cleanupId}] Cleanup failed:`, error.message);
+    log.error(`[retention-${cleanupId}] Cleanup failed:`, error.message);
     retentionCleanupTotal.inc({ status: 'failure' });
   }
 }
@@ -2513,7 +2499,7 @@ async function cleanupHistoryOrphanMethod(options) {
   try {
     const status = await gitStatus();
     if (!status.isClean()) {
-      console.log('[retention] Working directory is dirty. Attempting to auto-commit changes before cleanup...');
+      log.debug('[retention] Working directory is dirty. Attempting to auto-commit changes before cleanup...');
 
       // Add files matching configured patterns only (not all files)
       const extensions = getConfiguredExtensions();
@@ -2525,7 +2511,7 @@ async function cleanupHistoryOrphanMethod(options) {
           await gitRaw(['add', pattern]);
         } catch (err) {
           // Pattern may not match any files, which is fine
-          console.log(`[retention] Pattern ${pattern} matched no files (expected)`);
+          log.debug(`[retention] Pattern ${pattern} matched no files (expected)`);
         }
       }
 
@@ -2548,7 +2534,7 @@ async function cleanupHistoryOrphanMethod(options) {
 
       // If no valid files to commit, reset and continue
       if (stagedFiles.length === 0) {
-        console.log('[retention] No valid files to commit after filtering, continuing with cleanup');
+        log.debug('[retention] No valid files to commit after filtering, continuing with cleanup');
         await gitRaw(['reset']);
         cleanupLock = false;
         return {
@@ -2572,10 +2558,10 @@ async function cleanupHistoryOrphanMethod(options) {
       }
 
       await gitCommit(commitMessage);
-      console.log(`[retention] Created pre-cleanup commit: ${commitMessage}`);
+      log.debug(`[retention] Created pre-cleanup commit: ${commitMessage}`);
     }
   } catch (error) {
-    console.error('[retention] Failed to ensure clean working directory:', error.message);
+    log.error('[retention] Failed to ensure clean working directory:', error.message);
     cleanupLock = false;
     throw new Error(`Cannot start cleanup: Working directory is dirty and auto-commit failed: ${error.message}`);
   }
@@ -2610,21 +2596,21 @@ async function cleanupHistoryOrphanMethod(options) {
   }
 
   const timeDesc = timeDescription.join(', ');
-  console.log(`[retention] Starting cleanup - keeping last ${timeDesc}`);
+  log.info(`[retention] Starting cleanup - keeping last ${timeDesc}`);
 
   try {
     // Calculate cutoff date
     const cutoffDate = new Date(Date.now() - totalMs);
-    console.log(`[retention] Cutoff date: ${cutoffDate.toISOString()}`);
+    log.debug(`[retention] Cutoff date: ${cutoffDate.toISOString()}`);
 
     // Get current branch name
     const currentBranch = (await gitRevparse(['--abbrev-ref', 'HEAD'])).trim();
-    console.log(`[retention] Current branch: ${currentBranch}`);
+    log.debug(`[retention] Current branch: ${currentBranch}`);
 
     // Get all commits
     const log = await getLightweightGitLog();
     const allCommits = log.all;
-    console.log(`[retention] Total commits before cleanup: ${allCommits.length}`);
+    log.debug(`[retention] Total commits before cleanup: ${allCommits.length}`);
 
     if (allCommits.length === 0) {
       return {
@@ -2658,14 +2644,14 @@ async function cleanupHistoryOrphanMethod(options) {
     const commitsToKeep = allCommits.slice(0, splitIndex);
     const commitsToMerge = allCommits.slice(splitIndex);
 
-    console.log(`[retention] Commits to merge (older than cutoff): ${commitsToMerge.length}`);
-    console.log(`[retention] Commits to keep (newer than cutoff): ${commitsToKeep.length}`);
+    log.debug(`[retention] Commits to merge (older than cutoff): ${commitsToMerge.length}`);
+    log.debug(`[retention] Commits to keep (newer than cutoff): ${commitsToKeep.length}`);
 
     if (commitsToMerge.length > 0) {
-      console.log(`[retention] Date range of commits to merge: ${new Date(commitsToMerge[commitsToMerge.length - 1].date).toISOString()} to ${new Date(commitsToMerge[0].date).toISOString()}`);
+      log.debug(`[retention] Date range of commits to merge: ${new Date(commitsToMerge[commitsToMerge.length - 1].date).toISOString()} to ${new Date(commitsToMerge[0].date).toISOString()}`);
     }
     if (commitsToKeep.length > 0) {
-      console.log(`[retention] Date range of commits to keep: ${new Date(commitsToKeep[commitsToKeep.length - 1].date).toISOString()} to ${new Date(commitsToKeep[0].date).toISOString()}`);
+      log.debug(`[retention] Date range of commits to keep: ${new Date(commitsToKeep[commitsToKeep.length - 1].date).toISOString()} to ${new Date(commitsToKeep[0].date).toISOString()}`);
     }
 
     // Safety check: if we are keeping everything, do nothing
@@ -2681,7 +2667,7 @@ async function cleanupHistoryOrphanMethod(options) {
 
     // Safety check: if we are removing everything, keep at least the latest commit
     if (commitsToKeep.length === 0) {
-      console.log('[retention] Safety check: Would remove all commits. Keeping the most recent commit.');
+      log.debug('[retention] Safety check: Would remove all commits. Keeping the most recent commit.');
       commitsToKeep.push(allCommits[0]);
       // Remove the kept commit from merge list
       const index = commitsToMerge.findIndex(c => c.hash === allCommits[0].hash);
@@ -2690,7 +2676,7 @@ async function cleanupHistoryOrphanMethod(options) {
 
     // Create a backup branch just in case
     const backupBranch = `backup-before-cleanup-${Date.now()}`;
-    console.log(`[retention] Creating backup branch: ${backupBranch}`);
+    log.debug(`[retention] Creating backup branch: ${backupBranch}`);
     await gitBranch([backupBranch]);
 
     // Get the tree hash from the last commit we're merging
@@ -2700,7 +2686,7 @@ async function cleanupHistoryOrphanMethod(options) {
 
     // Handle case where we merge EVERYTHING (commitsToKeep is empty)
     if (commitsToKeep.length === 0) {
-      console.log('[retention] All commits are older than cutoff - merging everything into one baseline');
+      log.debug('[retention] All commits are older than cutoff - merging everything into one baseline');
 
       // Create baseline commit pointing to HEAD's tree
       const headCommit = allCommits[0];
@@ -2741,8 +2727,8 @@ async function cleanupHistoryOrphanMethod(options) {
     // Get the tree from the newest commit to be merged (the one right before oldest kept)
     let baselineTreeHash = (await gitRaw(['rev-parse', `${newestMergedCommit.hash}^{tree}`])).trim();
 
-    console.log(`[retention] Will merge ${commitsToMerge.length} commits into baseline`);
-    console.log(`[retention] Using tree from commit: ${newestMergedCommit.hash.substring(0, 8)}`);
+    log.debug(`[retention] Will merge ${commitsToMerge.length} commits into baseline`);
+    log.debug(`[retention] Using tree from commit: ${newestMergedCommit.hash.substring(0, 8)}`);
 
     // Create the baseline commit message
     // CRITICAL FIX: Use the OLDEST merged commit date so baseline appears at BOTTOM of timeline
@@ -2750,13 +2736,13 @@ async function cleanupHistoryOrphanMethod(options) {
     const newestMergedDate = commitsToMerge[0].date;
 
     // Debug: log all merged commit dates to verify ordering
-    console.log(`[retention] Merged commits date range:`);
-    console.log(`[retention]   Oldest (last in array): ${oldestMergedDate}`);
-    console.log(`[retention]   Newest (first in array): ${newestMergedDate}`);
+    log.debug(`[retention] Merged commits date range:`);
+    log.debug(`[retention]   Oldest (last in array): ${oldestMergedDate}`);
+    log.debug(`[retention]   Newest (first in array): ${newestMergedDate}`);
     if (commitsToMerge.length > 2) {
-      console.log(`[retention]   All ${commitsToMerge.length} merged commit dates:`);
+      log.debug(`[retention]   All ${commitsToMerge.length} merged commit dates:`);
       commitsToMerge.forEach((c, i) => {
-        console.log(`[retention]     [${i}] ${c.date} - ${c.message.split('\n')[0].substring(0, 50)}`);
+        log.debug(`[retention]     [${i}] ${c.date} - ${c.message.split('\n')[0].substring(0, 50)}`);
       });
     }
 
@@ -2766,9 +2752,9 @@ async function cleanupHistoryOrphanMethod(options) {
 
     const baselineMessage = `Merged history ${oldestMergedDate}`;
 
-    console.log(`[retention] Creating baseline commit...`);
-    console.log(`[retention] Baseline date: ${baselineDateISO} (1 second before oldest merged commit)`);
-    console.log(`[retention] This ensures baseline appears at the BOTTOM of the timeline`);
+    log.debug(`[retention] Creating baseline commit...`);
+    log.debug(`[retention] Baseline date: ${baselineDateISO} (1 second before oldest merged commit)`);
+    log.debug(`[retention] This ensures baseline appears at the BOTTOM of the timeline`);
 
     // Create the baseline commit with NO parents (making it a root/orphan commit)
     const { stdout: baselineCommitHashOut } = await gitExec(
@@ -2777,7 +2763,7 @@ async function cleanupHistoryOrphanMethod(options) {
     );
     const baselineCommitHash = baselineCommitHashOut.trim();
 
-    console.log(`[retention] Created baseline commit: ${baselineCommitHash.substring(0, 8)}`);
+    log.debug(`[retention] Created baseline commit: ${baselineCommitHash.substring(0, 8)}`);
 
     // Now we need to replay ONLY the kept commits on top of this baseline
     // Strategy: Use git rebase --onto to replay commits from oldestKeptCommit onwards
@@ -2790,21 +2776,21 @@ async function cleanupHistoryOrphanMethod(options) {
     } else {
       // If oldest kept commit has no parent, it's already the root
       // In this case, we can't use rebase, we just update the branch
-      console.log('[retention] Oldest kept commit has no parent - this should not happen due to safety checks');
+      log.debug('[retention] Oldest kept commit has no parent - this should not happen due to safety checks');
       throw new Error('Unexpected state: oldest kept commit has no parent');
     }
 
-    console.log(`[retention] Rebasing kept commits onto baseline...`);
-    console.log(`[retention] Replaying commits AFTER ${upstreamCommit.substring(0, 8)} onto ${baselineCommitHash.substring(0, 8)}`);
+    log.debug(`[retention] Rebasing kept commits onto baseline...`);
+    log.debug(`[retention] Replaying commits AFTER ${upstreamCommit.substring(0, 8)} onto ${baselineCommitHash.substring(0, 8)}`);
 
     // git rebase --onto <newbase> <upstream> <branch>
     // This will take all commits from <upstream>..<branch> and replay them onto <newbase>
     await gitRaw(['rebase', '--onto', baselineCommitHash, upstreamCommit, currentBranch]);
 
-    console.log('[retention] Rebase successful!');
+    log.debug('[retention] Rebase successful!');
 
     // Clean up unreachable objects (the old merged commits)
-    console.log('[retention] Cleaning up unreachable objects...');
+    log.debug('[retention] Cleaning up unreachable objects...');
     await gitRaw(['reflog', 'expire', '--expire=now', '--all']);
     await gitRaw(['gc', '--prune=now']);
 
@@ -2812,14 +2798,14 @@ async function cleanupHistoryOrphanMethod(options) {
     const logAfter = await getLightweightGitLog();
     const expectedTotal = commitsToKeep.length + 1; // kept commits + baseline
 
-    console.log(`[retention] Cleanup complete!`);
-    console.log(`[retention] Expected commits: ${expectedTotal} (${commitsToKeep.length} kept + 1 baseline)`);
-    console.log(`[retention] Actual commits: ${logAfter.total}`);
+    log.info(`[retention] Cleanup complete!`);
+    log.debug(`[retention] Expected commits: ${expectedTotal} (${commitsToKeep.length} kept + 1 baseline)`);
+    log.debug(`[retention] Actual commits: ${logAfter.total}`);
     if (logAfter.all.length > 0) {
       const oldestAfter = logAfter.all[logAfter.all.length - 1];
       const newestAfter = logAfter.all[0];
-      console.log(`[retention] Oldest commit: ${oldestAfter.hash.substring(0, 8)} - ${new Date(oldestAfter.date).toISOString()} - "${oldestAfter.message.substring(0, 50)}"`);
-      console.log(`[retention] Newest commit: ${newestAfter.hash.substring(0, 8)} - ${new Date(newestAfter.date).toISOString()}`);
+      log.debug(`[retention] Oldest commit: ${oldestAfter.hash.substring(0, 8)} - ${new Date(oldestAfter.date).toISOString()} - "${oldestAfter.message.substring(0, 50)}"`);
+      log.debug(`[retention] Newest commit: ${newestAfter.hash.substring(0, 8)} - ${new Date(newestAfter.date).toISOString()}`);
     }
 
     // Get new stats
@@ -2837,15 +2823,15 @@ async function cleanupHistoryOrphanMethod(options) {
     };
 
   } catch (error) {
-    console.error('[retention] Cleanup failed:', error);
+    log.error('[retention] Cleanup failed:', error);
 
     // Attempt recovery
     try {
-      console.log('[retention] Attempting to abort rebase...');
+      log.debug('[retention] Attempting to abort rebase...');
       await gitRaw(['rebase', '--abort']);
     } catch (e) {
       // Ignore if no rebase in progress
-      console.log('[retention] No rebase to abort or abort failed');
+      log.debug('[retention] No rebase to abort or abort failed');
     }
 
     throw error;
@@ -2900,7 +2886,7 @@ async function previewHistoryCleanup(options) {
   }
 
   const timeDesc = timeDescription.join(', ');
-  console.log(`[retention-preview] Previewing cleanup - keeping last ${timeDesc}`);
+  log.debug(`[retention-preview] Previewing cleanup - keeping last ${timeDesc}`);
 
   const cutoffDate = new Date(Date.now() - totalMs);
   const log = await getLightweightGitLog();
@@ -2961,12 +2947,12 @@ app.post('/api/retention/preview', async (req, res) => {
       });
     }
 
-    console.log(`[retention-api] Preview requested for ${months || 0}mo ${weeks || 0}w ${days || 0}d ${hours || 0}h ${minutes || 0}m ${seconds || 0}s`);
+    log.debug(`[retention-api] Preview requested for ${months || 0}mo ${weeks || 0}w ${days || 0}d ${hours || 0}h ${minutes || 0}m ${seconds || 0}s`);
     const preview = await previewHistoryCleanup({ months, weeks, days, hours, minutes, seconds });
 
     res.json(preview);
   } catch (error) {
-    console.error('[retention-api] Preview failed:', error);
+    log.error('[retention-api] Preview failed:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -2995,12 +2981,12 @@ app.post('/api/retention/cleanup', async (req, res) => {
       });
     }
 
-    console.log(`[retention-api] Cleanup requested for ${months || 0}mo ${weeks || 0}w ${days || 0}d ${hours || 0}h ${minutes || 0}m ${seconds || 0}s`);
+    log.debug(`[retention-api] Cleanup requested for ${months || 0}mo ${weeks || 0}w ${days || 0}d ${hours || 0}h ${minutes || 0}m ${seconds || 0}s`);
     const result = await cleanupHistoryOrphanMethod({ months, weeks, days, hours, minutes, seconds });
 
     res.json(result);
   } catch (error) {
-    console.error('[retention-api] Cleanup failed:', error);
+    log.error('[retention-api] Cleanup failed:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -3057,7 +3043,7 @@ app.get('/api/retention/status', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('[retention-api] Status check failed:', error);
+    log.error('[retention-api] Status check failed:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -3076,14 +3062,14 @@ app.get('/api/debug', (req, res) => {
 
 const server = app.listen(PORT, HOST, (err) => {
   if (err) {
-    console.error('[init] Failed to start server:', err);
+    log.error('[init] Failed to start server:', err);
     process.exit(1);
   }
 
-  console.log('='.repeat(60));
-  console.log('Home Assistant Version Control v1.1.1');
-  console.log('='.repeat(60));
-  console.log(`Server running at http://${HOST}:${PORT}`);
+  log.info('='.repeat(60));
+  log.info('Home Assistant Version Control v1.1.1');
+  log.info('='.repeat(60));
+  log.info(`Server running at http://${HOST}:${PORT}`);
 
   // Run initialization in background to avoid blocking server startup
   initRepo()
@@ -3094,7 +3080,7 @@ const server = app.listen(PORT, HOST, (err) => {
       startCloudSyncScheduler();
     })
     .catch((error) => {
-      console.error('[init] Background initialization error:', error);
+      log.error('[init] Background initialization error:', error);
     });
 });
 
@@ -3129,16 +3115,16 @@ function startCloudSyncScheduler() {
       }
 
       if (shouldPush) {
-        console.log(`[cloud-sync scheduler] Running ${settings.pushFrequency} push...`);
+        log.info(`[cloud-sync scheduler] Running ${settings.pushFrequency} push...`);
         await setupGitRemote(settings.remoteUrl, settings.authToken, settings.authUser);
         await pushToRemote(settings.includeSecrets);
       }
     } catch (error) {
-      console.error('[cloud-sync scheduler] Error:', error.message);
+      log.error('[cloud-sync scheduler] Error:', error.message);
     }
   }, 60 * 60 * 1000); // Check every hour
 
-  console.log('[cloud-sync] Scheduler started (checking hourly for scheduled pushes)');
+  log.info('[cloud-sync] Scheduler started (checking hourly for scheduled pushes)');
 }
 
 // Get all automations
@@ -3147,7 +3133,7 @@ app.get('/api/automations', async (req, res) => {
     const automations = await extractAutomations(CONFIG_PATH);
     res.json({ success: true, automations });
   } catch (error) {
-    console.error('[automations] Error:', error);
+    log.error('[automations] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3158,7 +3144,7 @@ app.get('/api/scripts', async (req, res) => {
     const scripts = await extractScripts(CONFIG_PATH);
     res.json({ success: true, scripts });
   } catch (error) {
-    console.error('[scripts] Error:', error);
+    log.error('[scripts] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3170,7 +3156,7 @@ app.get('/api/automation/:id/history', async (req, res) => {
     const { success, history, debugMessages } = await getAutomationHistory(id, CONFIG_PATH);
     res.json({ success, history, debugMessages });
   } catch (error) {
-    console.error('[automation history] Error:', error);
+    log.error('[automation history] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3182,7 +3168,7 @@ app.get('/api/script/:id/history', async (req, res) => {
     const { success, history, debugMessages } = await getScriptHistory(id, CONFIG_PATH);
     res.json({ success, history, debugMessages });
   } catch (error) {
-    console.error('[script history] Error:', error);
+    log.error('[script history] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3194,7 +3180,7 @@ app.get('/api/automation/:id/history-metadata', async (req, res) => {
     const result = await getAutomationHistoryMetadata(id, CONFIG_PATH);
     res.json(result);
   } catch (error) {
-    console.error('[automation history-metadata] Error:', error);
+    log.error('[automation history-metadata] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3210,7 +3196,7 @@ app.get('/api/automation/:id/at-commit', async (req, res) => {
     const result = await getAutomationAtCommit(id, commitHash, CONFIG_PATH);
     res.json(result);
   } catch (error) {
-    console.error('[automation at-commit] Error:', error);
+    log.error('[automation at-commit] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3222,7 +3208,7 @@ app.get('/api/script/:id/history-metadata', async (req, res) => {
     const result = await getScriptHistoryMetadata(id, CONFIG_PATH);
     res.json(result);
   } catch (error) {
-    console.error('[script history-metadata] Error:', error);
+    log.error('[script history-metadata] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3238,7 +3224,7 @@ app.get('/api/script/:id/at-commit', async (req, res) => {
     const result = await getScriptAtCommit(id, commitHash, CONFIG_PATH);
     res.json(result);
   } catch (error) {
-    console.error('[script at-commit] Error:', error);
+    log.error('[script at-commit] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3251,7 +3237,7 @@ app.get('/api/automation/:id/diff', async (req, res) => {
     const diff = await getAutomationDiff(id, commitHash, CONFIG_PATH);
     res.json({ success: true, diff });
   } catch (error) {
-    console.error('[automation diff] Error:', error);
+    log.error('[automation diff] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3264,7 +3250,7 @@ app.get('/api/script/:id/diff', async (req, res) => {
     const diff = await getScriptDiff(id, commitHash, CONFIG_PATH);
     res.json({ success: true, diff });
   } catch (error) {
-    console.error('[script diff] Error:', error);
+    log.error('[script diff] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3278,7 +3264,7 @@ app.post('/api/automation/:id/restore', async (req, res) => {
 
     if (success) {
       // Automatically reload automations in Home Assistant
-      console.log('[restore automation] Reloading automations in Home Assistant...');
+      log.info('[restore automation] Reloading automations in Home Assistant...');
       const reloadResult = await callHomeAssistantService('automation', 'reload');
 
       if (reloadResult.success) {
@@ -3290,7 +3276,7 @@ app.post('/api/automation/:id/restore', async (req, res) => {
       res.json({ success: false, message: 'Failed to restore automation' });
     }
   } catch (error) {
-    console.error('[restore automation] Error:', error);
+    log.error('[restore automation] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3304,7 +3290,7 @@ app.post('/api/script/:id/restore', async (req, res) => {
 
     if (success) {
       // Automatically reload scripts in Home Assistant
-      console.log('[restore script] Reloading scripts in Home Assistant...');
+      log.info('[restore script] Reloading scripts in Home Assistant...');
       const reloadResult = await callHomeAssistantService('script', 'reload');
 
       if (reloadResult.success) {
@@ -3316,7 +3302,7 @@ app.post('/api/script/:id/restore', async (req, res) => {
       res.json({ success: false, message: 'Failed to restore script' });
     }
   } catch (error) {
-    console.error('[restore script] Error:', error);
+    log.error('[restore script] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3351,23 +3337,23 @@ async function setupGitRemote(url, token, user) {
 
     // Log the URL being used (mask any token for security)
     const maskedUrl = authenticatedUrl.replace(/:\/\/([^@]+)@/, '://***@');
-    console.log('[cloud-sync] Setting up remote with URL:', maskedUrl);
+    log.info('[cloud-sync] Setting up remote with URL:', maskedUrl);
 
     // Check if origin remote exists
     try {
       await gitExec(['remote', 'get-url', 'origin']);
       // Remote exists, update it
       await gitExec(['remote', 'set-url', 'origin', authenticatedUrl]);
-      console.log('[cloud-sync] Updated existing remote origin');
+      log.debug('[cloud-sync] Updated existing remote origin');
     } catch (e) {
       // Remote doesn't exist, add it
       await gitExec(['remote', 'add', 'origin', authenticatedUrl]);
-      console.log('[cloud-sync] Added new remote origin');
+      log.debug('[cloud-sync] Added new remote origin');
     }
 
     return { success: true };
   } catch (error) {
-    console.error('[cloud-sync] Error setting up remote:', error);
+    log.error('[cloud-sync] Error setting up remote:', error);
     return { success: false, error: error.message };
   }
 }
@@ -3398,15 +3384,15 @@ async function configureSecretsTracking(include) {
     if (desiredGitignoreContent.trim() !== currentGitignoreContent.trim()) {
       await fsPromises.writeFile(gitignorePath, desiredGitignoreContent);
       gitignoreChanged = true;
-      console.log(`[cloud-sync] Updated .gitignore (secrets included: ${include})`);
+      log.debug(`[cloud-sync] Updated .gitignore (secrets included: ${include})`);
     } else {
-      console.log('[cloud-sync] .gitignore is up to date');
+      log.debug('[cloud-sync] .gitignore is up to date');
     }
 
     // 2. Manage Git Index (Tracked/Untracked)
     const { stdout: trackedFiles } = await gitExec(['ls-files', secretsPath]);
     const isTracked = trackedFiles.trim() !== '';
-    console.log(`[cloud-sync] secrets.yaml tracked: ${isTracked}, include: ${include}`);
+    log.debug(`[cloud-sync] secrets.yaml tracked: ${isTracked}, include: ${include}`);
 
     if (!include && isTracked) {
       // Stop tracking: Update .gitignore to exclude the file
@@ -3415,16 +3401,16 @@ async function configureSecretsTracking(include) {
       // Instead, we rely on .gitignore (already updated above) to prevent future tracking.
       // The file remains in repository history but won't be modified going forward.
 
-      console.log('[cloud-sync] Excluding secrets.yaml via .gitignore (file remains in history, no deletion commit)');
+      log.debug('[cloud-sync] Excluding secrets.yaml via .gitignore (file remains in history, no deletion commit)');
 
       // Only commit .gitignore change if it was updated
       if (gitignoreChanged) {
         try {
           await gitExec(['add', '.gitignore']);
           await gitExec(['commit', '-m', 'Update .gitignore to exclude secrets.yaml']);
-          console.log('[cloud-sync] Committed .gitignore update to exclude secrets.yaml');
+          log.debug('[cloud-sync] Committed .gitignore update to exclude secrets.yaml');
         } catch (e) {
-          console.log('[cloud-sync] Could not commit .gitignore update:', e.message);
+          log.debug('[cloud-sync] Could not commit .gitignore update:', e.message);
         }
       }
 
@@ -3438,33 +3424,33 @@ async function configureSecretsTracking(include) {
         if (gitignoreChanged) {
           await gitExec(['add', '.gitignore']);
         }
-        console.log('[cloud-sync] Added secrets.yaml to tracking');
+        log.debug('[cloud-sync] Added secrets.yaml to tracking');
       } catch (e) {
         // File might not exist
-        console.log('[cloud-sync] Could not add secrets.yaml:', e.message);
+        log.debug('[cloud-sync] Could not add secrets.yaml:', e.message);
       }
 
       // Commit the addition (was previously missing)
       try {
         const msg = gitignoreChanged ? 'secrets.yaml, .gitignore' : 'secrets.yaml';
         await gitExec(['commit', '-m', msg]);
-        console.log(`[cloud-sync] Committed secrets inclusion: ${msg}`);
+        log.debug(`[cloud-sync] Committed secrets inclusion: ${msg}`);
       } catch (e) {
-        console.log('[cloud-sync] Commit skipped (may already be tracked):', e.message);
+        log.debug('[cloud-sync] Commit skipped (may already be tracked):', e.message);
       }
     } else if (gitignoreChanged) {
       // Just stage and commit .gitignore change
       try {
         await gitExec(['add', '.gitignore']);
         await gitExec(['commit', '-m', '.gitignore']);
-        console.log('[cloud-sync] Committed .gitignore update');
+        log.debug('[cloud-sync] Committed .gitignore update');
       } catch (e) {
-        console.log('[cloud-sync] Could not commit .gitignore update:', e.message);
+        log.debug('[cloud-sync] Could not commit .gitignore update:', e.message);
       }
     }
 
   } catch (error) {
-    console.error('[cloud-sync] Error configuring secrets:', error);
+    log.error('[cloud-sync] Error configuring secrets:', error);
   }
 }
 
@@ -3478,7 +3464,7 @@ async function pushToRemote(includeSecrets = false) {
   try {
     // Pull before push if configured
     if (runtimeSettings.cloudSync.pullBeforePush) {
-      console.log('[cloud-sync] Pull before push enabled, pulling...');
+      log.debug('[cloud-sync] Pull before push enabled, pulling...');
       const pullResult = await pullFromRemote(runtimeSettings.cloudSync.pullRebase);
       if (!pullResult.success) {
         throw new Error(`Pre-push pull failed: ${pullResult.error}`);
@@ -3495,15 +3481,15 @@ async function pushToRemote(includeSecrets = false) {
       const branchResult = await gitRevparse(['--abbrev-ref', 'HEAD']);
       localBranch = branchResult.trim() || configuredBranch;
     } catch (e) {
-      console.log(`[cloud-sync] Could not determine branch, using ${configuredBranch}`);
+      log.debug(`[cloud-sync] Could not determine branch, using ${configuredBranch}`);
     }
 
     const remoteBranch = configuredBranch;
-    console.log(`[cloud-sync] Push started (branch: ${localBranch} -> origin/${remoteBranch})`);
+    log.info(`[cloud-sync] Push started (branch: ${localBranch} -> origin/${remoteBranch})`);
     await gitExec(['push', '-u', 'origin', `${localBranch}:${remoteBranch}`]);
 
     const durationSec = (Date.now() - startTime) / 1000;
-    console.log(`[cloud-sync] Push succeeded in ${durationSec.toFixed(1)}s`);
+    log.info(`[cloud-sync] Push succeeded in ${durationSec.toFixed(1)}s`);
 
     // Metrics
     pushTotal.inc({ status: 'success', reason: 'ok' });
@@ -3522,9 +3508,9 @@ async function pushToRemote(includeSecrets = false) {
   } catch (error) {
     const durationSec = (Date.now() - startTime) / 1000;
     const reason = classifyPushError(error.message);
-    console.error(`[cloud-sync] Push failed: ${reason} - ${error.message}`);
+    log.error(`[cloud-sync] Push failed: ${reason} - ${error.message}`);
     if (reason === 'non_fast_forward') {
-      console.log('[cloud-sync] Non-fast-forward rejection detected');
+      log.debug('[cloud-sync] Non-fast-forward rejection detected');
     }
 
     // Metrics
@@ -3556,12 +3542,12 @@ async function pullFromRemote(rebase = true) {
       const branchResult = await gitRevparse(['--abbrev-ref', 'HEAD']);
       localBranch = branchResult.trim() || configuredBranch;
     } catch (e) {
-      console.log(`[cloud-sync] Could not determine branch, using ${configuredBranch}`);
+      log.debug(`[cloud-sync] Could not determine branch, using ${configuredBranch}`);
     }
 
     const remoteBranch = configuredBranch;
     const strategy = rebase ? 'rebase' : 'merge';
-    console.log(`[cloud-sync] Pull started (origin/${remoteBranch} -> ${localBranch}, strategy: ${strategy})`);
+    log.info(`[cloud-sync] Pull started (origin/${remoteBranch} -> ${localBranch}, strategy: ${strategy})`);
 
     // Fetch first so we can check if there are changes
     await gitExec(['fetch', 'origin', remoteBranch]);
@@ -3573,12 +3559,12 @@ async function pullFromRemote(rebase = true) {
       behindCount = parseInt(countOutput.trim()) || 0;
     } catch (e) {
       // Remote branch may not exist yet
-      console.log('[cloud-sync] Could not determine behind count, proceeding with pull');
+      log.debug('[cloud-sync] Could not determine behind count, proceeding with pull');
     }
 
     if (behindCount === 0) {
       const durationSec = (Date.now() - startTime) / 1000;
-      console.log(`[cloud-sync] Pull: already up to date (${durationSec.toFixed(1)}s)`);
+      log.info(`[cloud-sync] Pull: already up to date (${durationSec.toFixed(1)}s)`);
       pullTotal.inc({ status: 'success', reason: 'up_to_date' });
       pullDuration.observe(durationSec);
       lastPullTimestamp.set(Math.floor(Date.now() / 1000));
@@ -3598,7 +3584,7 @@ async function pullFromRemote(rebase = true) {
     await gitExec(pullArgs);
 
     const durationSec = (Date.now() - startTime) / 1000;
-    console.log(`[cloud-sync] Pull succeeded: ${behindCount} commit(s) in ${durationSec.toFixed(1)}s`);
+    log.info(`[cloud-sync] Pull succeeded: ${behindCount} commit(s) in ${durationSec.toFixed(1)}s`);
 
     // Metrics
     pullTotal.inc({ status: 'success', reason: 'ok' });
@@ -3616,7 +3602,7 @@ async function pullFromRemote(rebase = true) {
   } catch (error) {
     const durationSec = (Date.now() - startTime) / 1000;
     const reason = classifyPullError(error.message);
-    console.error(`[cloud-sync] Pull failed: ${reason} - ${error.message}`);
+    log.error(`[cloud-sync] Pull failed: ${reason} - ${error.message}`);
 
     // Abort rebase/merge if stuck
     if (rebase) {
@@ -3648,10 +3634,10 @@ async function testRemoteConnection() {
     // Use ls-remote to test connection without actually pushing
     // Note: Don't use --exit-code as it fails on empty repos (exit code 2)
     await gitExec(['ls-remote', 'origin']);
-    console.log('[cloud-sync] Remote connection test successful');
+    log.info('[cloud-sync] Remote connection test successful');
     return { success: true };
   } catch (error) {
-    console.error('[cloud-sync] Remote connection test failed:', error);
+    log.error('[cloud-sync] Remote connection test failed:', error);
     return { success: false, error: error.message };
   }
 }
@@ -3682,11 +3668,11 @@ app.post('/api/github/device-flow/initiate', async (req, res) => {
 
     if (data.error) {
       const errorMsg = data.error_description || data.error || 'Unknown GitHub error';
-      console.error('[github device flow] Error:', errorMsg);
+      log.error('[github device flow] Error:', errorMsg);
       return res.status(400).json({ success: false, error: errorMsg });
     }
 
-    console.log('[github device flow] Initiated, user_code:', data.user_code);
+    log.debug('[github device flow] Initiated, user_code:', data.user_code);
 
     res.json({
       success: true,
@@ -3697,7 +3683,7 @@ app.post('/api/github/device-flow/initiate', async (req, res) => {
       interval: data.interval
     });
   } catch (error) {
-    console.error('[github device flow] Initiate error:', error);
+    log.error('[github device flow] Initiate error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3728,7 +3714,7 @@ app.post('/api/github/device-flow/poll', async (req, res) => {
     const data = await response.json();
 
     if (data.error) {
-      // console.log('[github device flow] Poll status:', data.error); 
+      // log.debug('[github device flow] Poll status:', data.error); 
 
       if (data.error === 'authorization_pending') {
         return res.json({ success: false, pending: true, error: 'Authorization pending' });
@@ -3743,12 +3729,12 @@ app.post('/api/github/device-flow/poll', async (req, res) => {
         return res.json({ success: false, denied: true, error: 'Access denied by user' });
       }
 
-      console.error('[github device flow] Poll error response:', data);
+      log.error('[github device flow] Poll error response:', data);
       return res.status(400).json({ success: false, error: data.error_description || data.error });
     }
 
     if (data.access_token) {
-      console.log('[github device flow] Token received successfully');
+      log.debug('[github device flow] Token received successfully');
 
       // Save the token to cloud sync settings and enable sync
       runtimeSettings.cloudSync.authToken = data.access_token;
@@ -3766,7 +3752,7 @@ app.post('/api/github/device-flow/poll', async (req, res) => {
       res.json({ success: false, error: 'No access token in response' });
     }
   } catch (error) {
-    console.error('[github device flow] Poll error:', error);
+    log.error('[github device flow] Poll error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3803,7 +3789,7 @@ app.get('/api/github/user', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('[github user] Error:', error);
+    log.error('[github user] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3822,16 +3808,16 @@ app.post('/api/github/disconnect', async (req, res) => {
     // Also remove the git remote to clear any embedded tokens
     try {
       await gitExec(['remote', 'remove', 'origin']);
-      console.log('[github] Removed git remote origin');
+      log.debug('[github] Removed git remote origin');
     } catch (e) {
       // Remote might not exist, that's okay
-      console.log('[github] No git remote to remove');
+      log.debug('[github] No git remote to remove');
     }
 
-    console.log('[github] Disconnected and cleared all cloud sync settings');
+    log.info('[github] Disconnected and cleared all cloud sync settings');
     res.json({ success: true });
   } catch (error) {
-    console.error('[github disconnect] Error:', error);
+    log.error('[github disconnect] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3875,7 +3861,7 @@ app.post('/api/github/create-repo', async (req, res) => {
         data.message?.includes('already exists');
 
       if (alreadyExists) {
-        console.log('[github create-repo] Repository already exists, fetching existing repo...');
+        log.debug('[github create-repo] Repository already exists, fetching existing repo...');
 
         // Get the authenticated user to build the repo URL
         const userResponse = await fetch('https://api.github.com/user', {
@@ -3906,7 +3892,7 @@ app.post('/api/github/create-repo', async (req, res) => {
         }
 
         const repoData = await repoResponse.json();
-        console.log('[github create-repo] Using existing repository:', repoData.clone_url);
+        log.debug('[github create-repo] Using existing repository:', repoData.clone_url);
 
         // Save the remote URL (both active and GitHub-specific)
         runtimeSettings.cloudSync.remoteUrl = repoData.clone_url;
@@ -3928,14 +3914,14 @@ app.post('/api/github/create-repo', async (req, res) => {
         });
       }
 
-      console.error('[github create-repo] Error:', data.message);
+      log.error('[github create-repo] Error:', data.message);
       return res.status(response.status).json({
         success: false,
         error: data.message || 'Failed to create repository'
       });
     }
 
-    console.log('[github create-repo] Created repository:', data.clone_url);
+    log.info('[github create-repo] Created repository:', data.clone_url);
 
     // Save the remote URL (both active and GitHub-specific)
     runtimeSettings.cloudSync.remoteUrl = data.clone_url;
@@ -3955,7 +3941,7 @@ app.post('/api/github/create-repo', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('[github create-repo] Error:', error);
+    log.error('[github create-repo] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3981,7 +3967,7 @@ app.get('/api/cloud-sync/status', async (req, res) => {
       lastPullError: runtimeSettings.cloudSync.lastPullError
     });
   } catch (error) {
-    console.error('[cloud-sync status] Error:', error);
+    log.error('[cloud-sync status] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -4012,7 +3998,7 @@ app.post('/api/cloud-sync/test', async (req, res) => {
     const testResult = await testRemoteConnection();
     res.json(testResult);
   } catch (error) {
-    console.error('[cloud-sync test] Error:', error);
+    log.error('[cloud-sync test] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -4042,7 +4028,7 @@ app.post('/api/cloud-sync/push', async (req, res) => {
     const pushResult = await pushToRemote(runtimeSettings.cloudSync.includeSecrets);
     res.json(pushResult);
   } catch (error) {
-    console.error('[cloud-sync push] Error:', error);
+    log.error('[cloud-sync push] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -4074,7 +4060,7 @@ app.post('/api/cloud-sync/pull', async (req, res) => {
     const pullResult = await pullFromRemote(rebase);
     res.json(pullResult);
   } catch (error) {
-    console.error('[cloud-sync pull] Error:', error);
+    log.error('[cloud-sync pull] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -4083,11 +4069,11 @@ app.post('/api/cloud-sync/pull', async (req, res) => {
 // Save cloud sync settings
 app.post('/api/cloud-sync/settings', async (req, res) => {
   try {
-    console.log('[cloud-sync settings] Received request:', JSON.stringify(req.body, null, 2));
+    log.debug('[cloud-sync settings] Received request:', JSON.stringify(req.body, null, 2));
     const { enabled, remoteUrl, authToken, authUser, pushFrequency, includeSecrets, authProvider, pullBeforePush, pullRebase, branch } = req.body;
 
     // Update basic settings
-    console.log('[cloud-sync settings] Updating local settings...');
+    log.debug('[cloud-sync settings] Updating local settings...');
     if (enabled !== undefined) runtimeSettings.cloudSync.enabled = enabled;
     if (authToken !== undefined) runtimeSettings.cloudSync.authToken = authToken;
     if (authUser !== undefined) runtimeSettings.cloudSync.authUser = authUser;
@@ -4117,16 +4103,16 @@ app.post('/api/cloud-sync/settings', async (req, res) => {
       } else if (runtimeSettings.cloudSync.githubRemoteUrl) {
         // Restore stored GitHub URL
         effectiveUrl = runtimeSettings.cloudSync.githubRemoteUrl;
-        console.log('[cloud-sync settings] Restored GitHub URL:', effectiveUrl);
+        log.debug('[cloud-sync settings] Restored GitHub URL:', effectiveUrl);
       } else {
         // Fallback: check if current remoteUrl is a GitHub URL (migration case)
         const currentUrl = runtimeSettings.cloudSync.remoteUrl || '';
         if (currentUrl.includes('github.com')) {
           effectiveUrl = currentUrl;
           runtimeSettings.cloudSync.githubRemoteUrl = currentUrl;
-          console.log('[cloud-sync settings] Migrated GitHub URL from remoteUrl:', effectiveUrl);
+          log.debug('[cloud-sync settings] Migrated GitHub URL from remoteUrl:', effectiveUrl);
         } else {
-          console.log('[cloud-sync settings] No GitHub URL found - user needs to connect GitHub');
+          log.debug('[cloud-sync settings] No GitHub URL found - user needs to connect GitHub');
         }
       }
     } else if (newProvider === 'generic') {
@@ -4138,14 +4124,14 @@ app.post('/api/cloud-sync/settings', async (req, res) => {
       } else if (runtimeSettings.cloudSync.customRemoteUrl) {
         // Restore stored custom URL
         effectiveUrl = runtimeSettings.cloudSync.customRemoteUrl;
-        console.log('[cloud-sync settings] Restored Custom URL:', effectiveUrl);
+        log.debug('[cloud-sync settings] Restored Custom URL:', effectiveUrl);
       } else {
         // Fallback: check if current remoteUrl is NOT a GitHub URL
         const currentUrl = runtimeSettings.cloudSync.remoteUrl || '';
         if (currentUrl && !currentUrl.includes('github.com')) {
           effectiveUrl = currentUrl;
           runtimeSettings.cloudSync.customRemoteUrl = currentUrl;
-          console.log('[cloud-sync settings] Migrated Custom URL from remoteUrl:', effectiveUrl);
+          log.debug('[cloud-sync settings] Migrated Custom URL from remoteUrl:', effectiveUrl);
         }
       }
     }
@@ -4157,25 +4143,25 @@ app.post('/api/cloud-sync/settings', async (req, res) => {
 
     // Set up remote if URL and token provided
     if (effectiveUrl && enabled) {
-      console.log('[cloud-sync settings] Setting up git remote...');
+      log.debug('[cloud-sync settings] Setting up git remote...');
       await setupGitRemote(effectiveUrl, authToken || runtimeSettings.cloudSync.authToken, runtimeSettings.cloudSync.authUser);
     }
 
     // Apply secrets tracking configuration immediately
-    console.log('[cloud-sync settings] Configuring secrets tracking...');
+    log.debug('[cloud-sync settings] Configuring secrets tracking...');
     await configureSecretsTracking(runtimeSettings.cloudSync.includeSecrets);
 
-    console.log('[cloud-sync settings] Saving runtime settings...');
+    log.debug('[cloud-sync settings] Saving runtime settings...');
     await saveRuntimeSettings();
-    console.log('[cloud-sync settings] Success!');
+    log.debug('[cloud-sync settings] Success!');
     const redactedCloudSync = { ...runtimeSettings.cloudSync };
     const hasToken = !!redactedCloudSync.authToken;
     delete redactedCloudSync.authToken;
     redactedCloudSync.hasAuthToken = hasToken;
     res.json({ success: true, settings: redactedCloudSync });
   } catch (error) {
-    console.error('[cloud-sync settings] Error:', error);
-    console.error('[cloud-sync settings] Stack:', error.stack);
+    log.error('[cloud-sync settings] Error:', error);
+    log.error('[cloud-sync settings] Stack:', error.stack);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -4200,7 +4186,7 @@ app.get('/api/cloud-sync/settings', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('[cloud-sync settings] Error:', error);
+    log.error('[cloud-sync settings] Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -4245,15 +4231,15 @@ app.get('/api/cloud-sync/avatar', async (req, res) => {
     // Try Gitea/Forgejo API first (most common for self-hosted)
     try {
       const giteaUrl = `${urlObj.origin}/api/v1/users/${username}`;
-      console.log(`[avatar] Trying Gitea API: ${giteaUrl}`);
+      log.debug(`[avatar] Trying Gitea API: ${giteaUrl}`);
       const giteaRes = await fetch(giteaUrl, { headers });
       if (giteaRes.ok) {
         userData = await giteaRes.json();
         provider = 'gitea';
-        console.log(`[avatar] Detected Gitea/Forgejo provider`);
+        log.debug(`[avatar] Detected Gitea/Forgejo provider`);
       }
     } catch (e) {
-      console.log(`[avatar] Gitea API failed: ${e.message}`);
+      log.debug(`[avatar] Gitea API failed: ${e.message}`);
     }
 
     // Try GitLab API if Gitea didn't work
@@ -4265,18 +4251,18 @@ app.get('/api/cloud-sync/avatar', async (req, res) => {
           delete gitlabHeaders['Authorization'];
         }
         const gitlabUrl = `${urlObj.origin}/api/v4/users?username=${username}`;
-        console.log(`[avatar] Trying GitLab API: ${gitlabUrl}`);
+        log.debug(`[avatar] Trying GitLab API: ${gitlabUrl}`);
         const gitlabRes = await fetch(gitlabUrl, { headers: gitlabHeaders });
         if (gitlabRes.ok) {
           const users = await gitlabRes.json();
           if (Array.isArray(users) && users.length > 0) {
             userData = users[0];
             provider = 'gitlab';
-            console.log(`[avatar] Detected GitLab provider`);
+            log.debug(`[avatar] Detected GitLab provider`);
           }
         }
       } catch (e) {
-        console.log(`[avatar] GitLab API failed: ${e.message}`);
+        log.debug(`[avatar] GitLab API failed: ${e.message}`);
       }
     }
 
@@ -4300,24 +4286,24 @@ app.get('/api/cloud-sync/avatar', async (req, res) => {
     }
 
   } catch (error) {
-    console.warn(`[avatar] Failed to fetch user info: ${error.message}`);
+    log.warn(`[avatar] Failed to fetch user info: ${error.message}`);
     res.json({ success: false, error: error.message });
   }
 });
 
 // Keep the process alive
 process.on('SIGTERM', () => {
-  console.log('[init] SIGTERM received, shutting down...');
+  log.info('[init] SIGTERM received, shutting down...');
   server.close(() => {
-    console.log('[init] Server closed');
+    log.info('[init] Server closed');
     process.exit(0);
   });
 });
 
 process.on('SIGINT', () => {
-  console.log('[init] SIGINT received, shutting down...');
+  log.info('[init] SIGINT received, shutting down...');
   server.close(() => {
-    console.log('[init] Server closed');
+    log.info('[init] Server closed');
     process.exit(0);
   });
 });

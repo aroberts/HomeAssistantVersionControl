@@ -2,6 +2,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
+import { log } from './log.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -274,14 +275,14 @@ export async function gitCheckoutSafe(commitHash, filePath) {
         fs.writeFileSync(fullPath, newContent, 'utf-8');
 
     } catch (error) {
-        console.error(`[git] Restore failed for ${filePath}: ${error.message}`);
+        log.error(`[git] Restore failed for ${filePath}: ${error.message}`);
         // Restore failed - try to restore the backup if we had one
         if (backupContent !== null) {
             try {
                 fs.writeFileSync(fullPath, backupContent, 'utf-8');
-                console.error(`[git] Restored backup after failed restore: ${filePath}`);
+                log.error(`[git] Restored backup after failed restore: ${filePath}`);
             } catch (restoreError) {
-                console.error(`[git] CRITICAL: Restore failed AND could not restore backup: ${restoreError.message}`);
+                log.error(`[git] CRITICAL: Restore failed AND could not restore backup: ${restoreError.message}`);
             }
         }
         throw error;
