@@ -185,6 +185,8 @@ For containerized deployments (especially when not persisting the `/data` direct
 | `RETENTION_UNIT` | Retention Unit | String | `hours`, `days`, `weeks`, `months` | `days` |
 | `LOG_LEVEL` | Log verbosity | String | `error`, `warn`, `info`, `debug` | `info` |
 
+**Log levels:** At `info` (the default), you'll see startup events, commits, restores, and push/pull results. Set to `debug` to include file watcher events, cache refreshes, retention calculation details, and other operational chatter. Set to `warn` or `error` to suppress everything except problems.
+
 **Notes:**
 - Boolean values are case-insensitive and accept: `true`/`false`, `yes`/`no`, `1`/`0`
 - String values (units, types) are case-insensitive: `SECONDS` and `seconds` are equivalent
@@ -382,7 +384,7 @@ Set the following environment variables:
 | :--- | :--- | :--- |
 | `AI_GENERATE_COMMIT_MESSAGES` | Yes | Set to `true` to enable |
 | `AI_BASE_URL` | Yes | Base URL of the API (see table below) |
-| `AI_MODEL` | Yes | Model identifier (e.g. `llama3.2`, `mistral`, `google/gemini-2.0-flash-001`) |
+| `AI_MODEL` | Yes | Model identifier (e.g. `mevatron/diffsense:1.5b`, `llama3.2`, `mistral`) |
 | `AI_API_KEY` | No | Bearer token for authentication. Optional for local providers like Ollama |
 | `AI_PROMPT` | No | Override the default system prompt for commit message generation |
 
@@ -399,6 +401,14 @@ All variables support Docker secrets via the `_FILE` suffix (e.g. `AI_API_KEY_FI
 
 The application appends `/chat/completions` to `AI_BASE_URL` automatically.
 
+### Model Recommendations
+
+For Ollama, [`mevatron/diffsense:1.5b`](https://ollama.com/mevatron/diffsense) is recommended — it's a purpose-built diff-to-commit-message model that produces accurate, well-structured messages at ~10s per commit on modest hardware.
+
+General-purpose models (`llama3.2:3b`, `gemma2:9b`, `mistral:7b`) also work but are slower and occasionally hallucinate (e.g., describing a deletion as an addition).
+
+> **Avoid thinking/reasoning models** (`qwen3`, `lfm2.5-thinking`, etc.) — these models spend their token budget on internal reasoning and often return empty commit messages. The application handles `<think>` blocks and the Ollama `reasoning` field, but small thinking models still frequently fail.
+
 ### Docker Compose Example
 
 ```yaml
@@ -408,27 +418,38 @@ services:
     environment:
       - AI_GENERATE_COMMIT_MESSAGES=true
       - AI_BASE_URL=http://ollama:11434/v1
-      - AI_MODEL=llama3.2
+      - AI_MODEL=mevatron/diffsense:1.5b
     # ...
 ```
 
-### Test Script
+### Test Scripts
 
-A test script is included to debug AI endpoint connectivity and response parsing without running the full server:
+**Diagnostics** — Debug AI endpoint connectivity and response parsing without running the full server:
 
 ```bash
 cd homeassistant-version-control
-AI_BASE_URL=http://localhost:11434/v1 AI_MODEL=llama3.2 node test-ai-commit.js
+AI_BASE_URL=http://localhost:11434/v1 AI_MODEL=mevatron/diffsense:1.5b node test-ai-commit.js
 ```
 
 The script sends a sample diff, dumps the full raw API response, and diagnoses common issues (empty responses, unexpected response structure, thinking-model quirks).
+
+**Benchmarking** — Compare all installed Ollama models against a suite of sample diffs:
+
+```bash
+cd homeassistant-version-control
+OLLAMA_HOST=http://localhost:11434 node test-bench-ai-commit.js
+```
+
+This runs every model against 7 representative HA config diffs and outputs a timing matrix, message comparison, and success rate summary. Use `--filter 'llama|gemma'` to test a subset of models.
 
 ## Fork Changes
 
 This fork adds the following features on top of the upstream project:
 
-- **AI-generated commit messages** — Meaningful commit messages via any OpenAI-compatible API (see above)
-- **AI commit messages in timeline UI** — AI-generated messages are displayed in the version history
+- **AI-generated commit messages** — Meaningful commit messages via any OpenAI-compatible API (Ollama, Open WebUI, OpenRouter, etc.)
+- **Thinking model support** — Handles `<think>` blocks and Ollama `reasoning` field so thinking models degrade gracefully
+- **AI commit messages in timeline UI** — AI-generated messages displayed in the version history with body shown on hover
+- **Structured logging** — Configurable log levels (`LOG_LEVEL`) to control verbosity
 - **Cloud sync pull** — Pull from remote before pushing to handle multi-instance setups
 - **Configurable sync branch** — Set the remote branch name via `CLOUD_SYNC_BRANCH`
 - **Configurable auth provider** — Support for Gitea and generic Git servers via `CLOUD_SYNC_AUTH_PROVIDER`

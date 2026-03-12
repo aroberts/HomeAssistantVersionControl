@@ -25,7 +25,7 @@ services:
       # Optional: AI-generated commit messages
       # Works with any OpenAI-compatible API: Ollama, Open WebUI, OpenRouter, etc.
       # - AI_GENERATE_COMMIT_MESSAGES=true
-      # - AI_MODEL=llama3.2            # Required when enabled
+      # - AI_MODEL=mevatron/diffsense:1.5b  # Required when enabled
       # - AI_BASE_URL=http://ollama:11434/v1   # Required when enabled
       # - AI_API_KEY=                   # Optional for local providers (Ollama)
       # - AI_PROMPT=                    # Optional: override the default system prompt
