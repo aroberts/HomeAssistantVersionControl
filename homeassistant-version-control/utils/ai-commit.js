@@ -4,13 +4,54 @@ import { log } from './log.js';
 
 const DEFAULT_PROMPT = [
   'You are a commit message generator for a Home Assistant configuration repository.',
-  'Given a git diff, write a concise commit message summarizing the changes.',
-  'Focus on WHAT changed (e.g. "Update automation for porch lights", "Add new script for morning routine").',
-  'Do not use conventional commit prefixes. Do not mention file paths unless they add clarity.',
-  'Output ONLY the commit message, nothing else. Keep it under 72 characters.',
-].join(' ');
+  'Given a git diff, write a commit message with a short subject line and a longer body.',
+  '',
+  'Format:',
+  '<subject line — max 72 characters, summarizing WHAT changed>',
+  '',
+  '<body — a few sentences explaining the changes in more detail>',
+  '',
+  'Rules:',
+  '- The subject should be concise and focus on WHAT changed',
+  '  (e.g. "Add garage door open alert automation")',
+  '- Do not use conventional commit prefixes (feat:, fix:, etc.)',
+  '- The body should explain WHY or provide context for the changes',
+  '- Mention specific entities, automations, or scripts by name when relevant',
+  '- Do not mention file paths unless they add clarity',
+  '- Output ONLY the commit message (subject + blank line + body), nothing else',
+].join('\n');
 
 let config = null;
+
+/**
+ * Extract the commit message from a chat completion choice.
+ * Handles normal content, <think> blocks in content, and the
+ * separate `reasoning` field used by Ollama thinking models.
+ */
+function extractCommitMessage(choice) {
+  if (!choice?.message) return null;
+  const { content, reasoning } = choice.message;
+
+  // Try content first, stripping <think> blocks
+  if (content) {
+    const stripped = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    if (stripped) return stripped.replace(/^["']|["']$/g, '');
+  }
+
+  // content was empty — try the reasoning field as a last resort.
+  // Thinking models sometimes put everything in reasoning and never fill content.
+  if (reasoning) {
+    const lines = reasoning.split('\n').map(l => l.trim()).filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (line.length <= 72 && !line.startsWith('-') && !line.startsWith('*') && !line.includes('?')) {
+        return line.replace(/^["']|["']$/g, '');
+      }
+    }
+  }
+
+  return null;
+}
 
 export function initAiCommit() {
   const enabled = process.env.AI_GENERATE_COMMIT_MESSAGES === 'true';
@@ -81,7 +122,7 @@ export async function generateAiCommitMessage(fallbackMessage) {
           { role: 'system', content: config.prompt },
           { role: 'user', content: userContent },
         ],
-        max_tokens: 100,
+        max_tokens: 512,
         temperature: 0.3,
       }),
     });
@@ -92,14 +133,12 @@ export async function generateAiCommitMessage(fallbackMessage) {
     }
 
     const data = await response.json();
-    const message = data.choices?.[0]?.message?.content?.trim();
+    const choice = data.choices?.[0];
+    const cleaned = extractCommitMessage(choice);
 
-    if (!message) {
+    if (!cleaned) {
       throw new Error(`Empty response from ${config.url}`);
     }
-
-    // Strip quotes if the model wraps the message in them
-    const cleaned = message.replace(/^["']|["']$/g, '');
     log.info(`[ai-commit] Generated: ${cleaned}`);
     return cleaned;
   } catch (error) {

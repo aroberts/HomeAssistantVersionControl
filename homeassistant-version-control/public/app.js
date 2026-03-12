@@ -2710,10 +2710,14 @@ async function displayCommits(commits) {
           displayText = fileName;
         }
 
+        const tooltip = commit.body
+          ? escapeHtml(displayText + '\n\n' + commit.body)
+          : escapeHtml(displayText);
+
         html += `
               <div class="commit" onclick="showCommit('${commit.hash}')" oncontextmenu="showTimelineContextMenu(event, '${commit.hash}')" id="commit-${commit.hash}">
                 <div class="commit-time">${timeString}</div>
-                <div class="commit-file${aiClass}" title="${escapeHtml(displayText)}">${escapeHtml(displayText)}</div>
+                <div class="commit-file${aiClass}" title="${tooltip}">${escapeHtml(displayText)}</div>
               </div>
             `;
       }
