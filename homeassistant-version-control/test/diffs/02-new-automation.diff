@@ -1,0 +1,30 @@
+diff --git a/automations.yaml b/automations.yaml
+index 1a2b3c4..5d6e7f8 100644
+--- a/automations.yaml
++++ b/automations.yaml
+@@ -45,3 +45,25 @@
+     action:
+       - service: light.turn_off
+         entity_id: light.living_room
++
++- id: garage_door_open_alert
++  alias: "Alert when garage door left open"
++  description: "Send notification if garage door is open for more than 10 minutes"
++  trigger:
++    - platform: state
++      entity_id: cover.garage_door
++      to: "open"
++      for:
++        minutes: 10
++  condition:
++    - condition: time
++      after: "22:00:00"
++      before: "06:00:00"
++  action:
++    - service: notify.mobile_app_phone
++      data:
++        title: "Garage Door Alert"
++        message: "Garage door has been open for 10 minutes"
++        data:
++          tag: garage-alert
++          priority: high

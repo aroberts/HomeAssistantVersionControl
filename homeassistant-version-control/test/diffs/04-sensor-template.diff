@@ -1,0 +1,28 @@
+diff --git a/configuration.yaml b/configuration.yaml
+index c3d4e5f..a6b7c8d 100644
+--- a/configuration.yaml
++++ b/configuration.yaml
+@@ -30,6 +30,10 @@ sensor:
+   - platform: time_date
+     display_options:
+       - 'time'
++  - platform: rest
++    name: "Outside AQI"
++    resource: https://api.example.com/aqi
++    value_template: "{{ value_json.data.aqi }}"
+
+ template:
+   - sensor:
+@@ -40,3 +44,12 @@ template:
+         unit_of_measurement: "W"
+         state: >
+           {{ states('sensor.solar_panel_power') | float - states('sensor.grid_export') | float }}
++  - sensor:
++      - name: "HVAC Runtime Today"
++        unique_id: hvac_runtime_today
++        unit_of_measurement: "h"
++        state: >
++          {% set runtime = state_attr('climate.thermostat', 'hvac_action_duration') %}
++          {% if runtime %}
++            {{ (runtime / 3600) | round(1) }}
++          {% else %}0{% endif %}

@@ -1,0 +1,32 @@
+diff --git a/.storage/lovelace.dashboard_energy b/.storage/lovelace.dashboard_energy
+index f1e2d3c..4a5b6c7 100644
+--- a/.storage/lovelace.dashboard_energy
++++ b/.storage/lovelace.dashboard_energy
+@@ -15,6 +15,24 @@
+             "type": "energy-date-selection"
+           },
+           {
++            "type": "vertical-stack",
++            "cards": [
++              {
++                "type": "gauge",
++                "entity": "sensor.solar_panel_power",
++                "name": "Solar Production",
++                "min": 0,
++                "max": 5000,
++                "severity": {
++                  "green": 2000,
++                  "yellow": 500,
++                  "red": 0
++                }
++              },
++              {
++                "type": "entity",
++                "entity": "sensor.hvac_runtime_today"
++              }
++            ]
++          },
++          {
+             "type": "energy-usage-graph"
+           },
+           {

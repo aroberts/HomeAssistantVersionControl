@@ -1,0 +1,29 @@
+diff --git a/scripts.yaml b/scripts.yaml
+index 9a8b7c6..1d2e3f4 100644
+--- a/scripts.yaml
++++ b/scripts.yaml
+@@ -18,22 +18,6 @@ movie_time:
+         brightness_pct: 20
+       target:
+         entity_id: light.living_room
+-
+-morning_routine:
+-  alias: "Morning Routine"
+-  sequence:
+-    - service: light.turn_on
+-      data:
+-        brightness_pct: 80
+-        color_temp: 350
+-      target:
+-        entity_id: light.bedroom
+-    - delay:
+-        seconds: 5
+-    - service: media_player.play_media
+-      target:
+-        entity_id: media_player.bedroom_speaker
+-      data:
+-        media_content_id: "news_briefing"
+-        media_content_type: "music"
+
+ bedtime:
+   alias: "Bedtime"

@@ -1,0 +1,66 @@
+diff --git a/automations.yaml b/automations.yaml
+index 2a3b4c5..6d7e8f9 100644
+--- a/automations.yaml
++++ b/automations.yaml
+@@ -1,15 +1,15 @@
+ - id: living_room_motion
+-  alias: "Living Room Motion Light"
++  alias: "Living Room Motion Activated Light"
+   trigger:
+     - platform: state
+       entity_id: binary_sensor.living_room_motion
+       to: "on"
+   condition:
+-    - condition: state
+-      entity_id: sun.sun
+-      state: "below_horizon"
++    - condition: numeric_state
++      entity_id: sensor.living_room_illuminance
++      below: 40
+   action:
+     - service: light.turn_on
+       target:
+         entity_id: light.living_room
+       data:
+-        brightness_pct: 100
++        brightness_pct: 80
++        transition: 2
+diff --git a/scripts.yaml b/scripts.yaml
+index 3b4c5d6..7e8f9a0 100644
+--- a/scripts.yaml
++++ b/scripts.yaml
+@@ -1,7 +1,7 @@
+ movie_time:
+   alias: "Movie Time"
+   sequence:
+-    - service: light.turn_off
++    - service: light.turn_on
+       data:
+-        entity_id: light.living_room
+-    - service: light.turn_on
++        brightness_pct: 5
++        transition: 3
+       target:
+-        entity_id: light.tv_backlight
+-      data:
+-        brightness_pct: 30
++        entity_id:
++          - light.living_room
++          - light.tv_backlight
+diff --git a/configuration.yaml b/configuration.yaml
+index 4c5d6e7..8f9a0b1 100644
+--- a/configuration.yaml
++++ b/configuration.yaml
+@@ -8,3 +8,8 @@ homeassistant:
+ automation: !include automations.yaml
+ script: !include scripts.yaml
+ scene: !include scenes.yaml
++
++input_number:
++  living_room_brightness_threshold:
++    name: "Living Room Brightness Threshold"
++    min: 0
++    max: 100
++    step: 5
++    unit_of_measurement: "lx"
++    icon: mdi:brightness-6
