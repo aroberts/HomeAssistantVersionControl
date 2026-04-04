@@ -11,7 +11,7 @@ export async function gitExec(args, options = {}) {
     if (!global.CONFIG_PATH) {
         throw new Error('CONFIG_PATH not initialized');
     }
-    const { timeout = 30000, env } = options;
+    const { timeout = 30000, env, ignoreSslErrors = false } = options;
 
     const execOptions = {
         cwd: global.CONFIG_PATH,
@@ -26,7 +26,12 @@ export async function gitExec(args, options = {}) {
         ...(env || {})
     };
 
-    return execFileAsync('git', args, execOptions);
+    const finalArgs = [...args];
+    if (ignoreSslErrors) {
+        finalArgs.unshift('-c', 'http.sslVerify=false');
+    }
+
+    return execFileAsync('git', finalArgs, execOptions);
 }
 
 // ──────────────────────────────────────────────────
@@ -127,7 +132,7 @@ export async function gitStatus() {
     const { stdout } = await gitExec(['status', '--porcelain', '--branch']);
     const lines = stdout.trim().split('\n');
     const files = [];
-    let branch = 'master';
+    let branch = 'main';
     for (const line of lines) {
         if (line.startsWith('##')) {
             branch = line.split(' ')[1]?.split('...')[0] || branch;

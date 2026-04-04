@@ -8,14 +8,27 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
   <link rel="stylesheet" href="css/style.css?v=1734109500">
   <link rel="icon" type="image/x-icon" href="images/favicon.ico">
+  <script>
+    // Apply saved panel width before rendering to prevent transition flash
+    (function () {
+      const savedWidth = localStorage.getItem('panel-width');
+      if (savedWidth && window.innerWidth > 768) {
+        const style = document.createElement('style');
+        style.id = 'resizer-init-style';
+        style.innerHTML = `.panel:first-child { width: ${savedWidth} !important; }`;
+        document.head.appendChild(style);
+      }
+    })();
+  </script>
 </head>
 
 <body class="dark-mode">
-  <!-- Snow Container for Holiday Mode -->
-  <div id="snowContainer" class="snow-container"></div>
+  <!-- Confetti Container for Confetti Mode -->
+  <div id="confettiContainer" class="confetti-container"></div>
   <div class="container">
     <div class="header">
-      <div style="display: flex; align-items: center; gap: clamp(10px, 1.5vw, 14px);">
+      <div style="display: flex; align-items: center; gap: clamp(10px, 1.5vw, 14px); cursor: pointer;"
+        onclick="cyclePicassoPalette()">
         <img src="images/icon.png" alt="Logo"
           style="width: clamp(36px, 5vw, 48px); height: clamp(36px, 5vw, 48px); border-radius: 6px;">
         <div style="margin-top: -4px;">
@@ -66,6 +79,8 @@
           </div>
         </div>
       </div>
+
+      <div class="resizer" id="resizer"></div>
 
       <div class="panel">
         <div class="panel-header">
@@ -214,14 +229,17 @@
               </p>
             </div>
 
+
+
+
             <div class="setting-item" style="margin-bottom: 20px;">
               <label style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
                 <span style="color: var(--text-primary); font-size: 14px;"
                   data-i18n="settings.history_retention">History
                   Retention</span>
                 <div class="toggle-switch">
-                  <input type="checkbox" id="historyRetention" style="display: none;">
-                  <label for="historyRetention" class="toggle-slider" onclick="handleRetentionToggle()"></label>
+                  <input type="checkbox" id="historyRetention" style="display: none;" onchange="handleRetentionToggle()">
+                  <label for="historyRetention" class="toggle-slider"></label>
                 </div>
               </label>
               <div id="retentionOptions" style="margin-top: 12px;">
@@ -277,6 +295,54 @@
                 <p style="color: var(--text-secondary); font-size: 12px; margin-top: 6px; margin-left: 2px;"
                   data-i18n="settings.history_retention_desc">
                   Merge versions older than the specified time period
+                </p>
+              </div>
+            </div>
+
+            <div id="maxCommitsOptions" style="margin-bottom: 20px;">
+              <label style="display: flex; justify-content: space-between; align-items: center; cursor: pointer; margin-bottom: 8px;">
+                <span style="color: var(--text-primary); font-size: 14px;" data-i18n="settings.limit_history">Max Commits to Show</span>
+                <div class="toggle-switch">
+                  <input type="checkbox" id="limitHistory" style="display: none;" onchange="handleLimitHistoryToggle()">
+                  <label for="limitHistory" class="toggle-slider"></label>
+                </div>
+              </label>
+              
+              <div id="maxCommitsValueSection" style="margin-top: 12px;">
+                <div class="custom-number-input-wrapper" style="position: relative;">
+                  <input type="number" id="maxCommits" min="50" max="10000" value="50" style="
+                    width: 100%;
+                    padding: 10px 32px 10px 12px;
+                    background: var(--bg-tertiary);
+                    border: 1px solid var(--border-subtle);
+                    border-radius: var(--radius-md);
+                    color: var(--text-primary);
+                    font-size: 14px;
+                    -moz-appearance: textfield;
+                    appearance: textfield;
+                  ">
+                  <div class="custom-spinners"
+                    style="position: absolute; right: 2px; top: 2px; bottom: 2px; display: flex; flex-direction: column; width: 24px;">
+                    <button class="spinner-btn spinner-up" onclick="stepInput('maxCommits', 10)"
+                      style="flex: 1; border: none; background: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0;">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none"
+                        stroke="#9ca3af" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"
+                        style="transform: rotate(180deg);">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                      </svg>
+                    </button>
+                    <button class="spinner-btn spinner-down" onclick="stepInput('maxCommits', -10)"
+                      style="flex: 1; border: none; background: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0;">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none"
+                        stroke="#9ca3af" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                <p style="color: var(--text-secondary); font-size: 12px; margin-top: 6px; margin-left: 2px;"
+                  data-i18n="settings.max_commits_desc">
+                  Maximum number of commits to display in the timeline (50-10000)
                 </p>
               </div>
             </div>
@@ -426,6 +492,13 @@
                     data-i18n="settings.cloud_remote_url_desc">
                     Supports HTTPS URLs (GitLab, Gitea, Bitbucket, etc.)
                   </p>
+                  <div style="margin-top: 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
+                    <span style="color: var(--text-primary); font-size: 14px;" data-i18n="settings.cloud_ignore_ssl">Ignore SSL Errors</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="cloudIgnoreSslErrors" style="display: none;">
+                      <label for="cloudIgnoreSslErrors" class="toggle-slider"></label>
+                    </div>
+                  </div>
                 </div>
 
                 <!-- Connected State -->
@@ -672,16 +745,14 @@
             </div>
           </div>
 
-          <!-- Holiday Mode at the very bottom -->
-          <!-- Winter Mode - Minimal at bottom -->
+          <!-- Confetti Mode at the very bottom -->
           <div class="setting-item" style="display: flex; justify-content: space-between; align-items: center;">
             <div>
-              <span style="color: var(--text-primary); font-size: 14px;" data-i18n="settings.winter_mode">Winter
-                Mode</span>
+              <span style="color: var(--text-primary); font-size: 14px;" data-i18n="settings.confetti_mode">Confetti Mode</span>
             </div>
             <div class="toggle-switch">
-              <input type="checkbox" id="winterMode" style="display: none;">
-              <label for="winterMode" class="toggle-slider" onclick="toggleWinterMode()"></label>
+              <input type="checkbox" id="confettiMode" style="display: none;" onchange="toggleConfettiMode()">
+              <label for="confettiMode" class="toggle-slider"></label>
             </div>
           </div>
         </div>
@@ -697,7 +768,7 @@
   </div>
 
 
-  <script src="app.js?v=1734394700"></script>
+  <script src="app.js?v=1741715719"></script>
 </body>
 
 </html>

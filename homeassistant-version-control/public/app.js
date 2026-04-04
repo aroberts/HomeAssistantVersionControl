@@ -230,13 +230,71 @@ async function loadSettings() {
         document.getElementById('retentionUnit').value = settings.retentionUnit;
         localStorage.setItem('retentionUnit', settings.retentionUnit);
 
-        // Run cleanup on commit
+        // Max commits
+        document.getElementById('limitHistory').checked = settings.limitHistory;
+        localStorage.setItem('limitHistory', settings.limitHistory);
+        document.getElementById('maxCommits').value = settings.maxCommits;
+        localStorage.setItem('maxCommits', settings.maxCommits);
+
+        // Update UI state
+        handleRetentionToggle();
+        handleLimitHistoryToggle();
 
       }
     }
   } catch (error) {
     console.error('Error loading settings from server:', error);
   }
+}
+
+/**
+ * Initialize the panel resizer
+ */
+function initResizer() {
+  const resizer = document.getElementById('resizer');
+  const leftSide = resizer?.previousElementSibling;
+
+  if (!resizer || !leftSide) return;
+
+  let x = 0;
+  let w = 0;
+
+  const onMouseMove = (e) => {
+    const dx = e.clientX - x;
+    const newWidth = ((w + dx) / resizer.parentNode.getBoundingClientRect().width) * 100;
+
+    // Constraints
+    if (newWidth > 15 && newWidth < 70) {
+      leftSide.style.setProperty('width', `${newWidth}%`, 'important');
+    }
+  };
+
+  const onMouseUp = () => {
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+    document.body.classList.remove('resizing');
+
+    // Save to localStorage
+    localStorage.setItem('panel-width', leftSide.style.width);
+
+    // Remove the temporary head style if it still exists (it shouldn't)
+    document.getElementById('resizer-init-style')?.remove();
+  };
+
+  resizer.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+
+    // Remove the early-load style so inline styles can take over
+    document.getElementById('resizer-init-style')?.remove();
+
+    x = e.clientX;
+    const scrollWidth = leftSide.getBoundingClientRect().width;
+    w = scrollWidth;
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+    document.body.classList.add('resizing');
+  });
 }
 
 // Load settings from localStorage on page load
@@ -266,6 +324,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   applyFontToDiffs();
   updateFontButton();
   updateFontSizeButton();
+
+  // Initialize resizer
+  initResizer();
 
 
   // Load other settings that are not in runtime settings
@@ -374,8 +435,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   injectSelectedColorStyle();
   injectHoverStyles();
 
-  // Initialize Winter Mode from localStorage
-  initWinterMode();
+  // Initialize Confetti Mode from localStorage
+  initConfettiMode();
 
   // Initialize the view
   switchMode(currentMode);
@@ -619,6 +680,42 @@ const PICASSO_PALETTE = [
   { name: 'Forest', primary: '#16A085', secondary: '#F39C12' },
   { name: 'Ocean', primary: '#2193b0', secondary: '#6dd5ed' }
 ];
+
+/**
+ * Cycle through defined color palettes
+ */
+function cyclePicassoPalette() {
+  const primaryInput = document.getElementById('picassoPrimaryColor');
+  const secondaryInput = document.getElementById('picassoSecondaryColor');
+  if (!primaryInput || !secondaryInput) return;
+
+  const currentPrimary = primaryInput.value.toLowerCase();
+  const currentSecondary = secondaryInput.value.toLowerCase();
+
+  // Find current index
+  let currentIndex = PICASSO_PALETTE.findIndex(p =>
+    p.primary.toLowerCase() === currentPrimary &&
+    p.secondary.toLowerCase() === currentSecondary
+  );
+
+  // Move to next
+  const nextIndex = (currentIndex + 1) % PICASSO_PALETTE.length;
+  const nextPalette = PICASSO_PALETTE[nextIndex];
+
+  // Apply
+  primaryInput.value = nextPalette.primary;
+  secondaryInput.value = nextPalette.secondary;
+
+  // Trigger input events manually to apply and save
+  primaryInput.dispatchEvent(new Event('input'));
+  secondaryInput.dispatchEvent(new Event('input'));
+
+  // Update visual selection in settings if open
+  updatePaletteSelection(nextPalette.primary, nextPalette.secondary);
+
+  // Show notification
+  showNotification(`Theme Palette: ${nextPalette.name}`, 'info', 1500);
+}
 
 function initializeColorPalettes() {
   const container = document.getElementById('combinedPaletteContainer');
@@ -1218,6 +1315,9 @@ async function saveSettings() {
   const retentionValue = document.getElementById('retentionValue').value;
   const retentionUnit = document.getElementById('retentionUnit').value;
   const historyRetention = document.getElementById('historyRetention').checked;
+  const limitHistory = document.getElementById('limitHistory').checked;
+  const maxCommits = parseInt(document.getElementById('maxCommits').value);
+
   const diffViewSplit = document.getElementById('diffViewSplit').checked;
   const newDiffViewFormat = diffViewSplit ? 'split' : 'unified';
   const newDiffStyle = document.getElementById('diffStyle').value;
@@ -1231,6 +1331,8 @@ async function saveSettings() {
   localStorage.setItem('retentionValue', retentionValue);
   localStorage.setItem('retentionUnit', retentionUnit);
   localStorage.setItem('historyRetention', historyRetention);
+  localStorage.setItem('limitHistory', limitHistory);
+  localStorage.setItem('maxCommits', maxCommits);
   localStorage.setItem('diffViewFormat', newDiffViewFormat);
   localStorage.setItem('diffStyle', newDiffStyle);
 
@@ -1252,6 +1354,8 @@ async function saveSettings() {
         retentionType,
         retentionValue,
         retentionUnit,
+        limitHistory,
+        maxCommits,
         extensions: currentExtensions
       })
     });
@@ -1301,11 +1405,19 @@ async function saveSettings() {
 function handleRetentionToggle() {
   const historyRetention = document.getElementById('historyRetention');
   const retentionOptions = document.getElementById('retentionOptions');
-
   if (historyRetention && retentionOptions) {
     retentionOptions.style.display = historyRetention.checked ? 'block' : 'none';
   }
 }
+
+function handleLimitHistoryToggle() {
+  const limitHistory = document.getElementById('limitHistory');
+  const maxCommitsValueSection = document.getElementById('maxCommitsValueSection');
+  if (limitHistory && maxCommitsValueSection) {
+    maxCommitsValueSection.style.display = limitHistory.checked ? 'block' : 'none';
+  }
+}
+
 
 // =====================================
 // Cloud Sync Functions
@@ -1326,6 +1438,7 @@ async function loadCloudSyncSettings() {
     const data = await response.json();
 
     if (data.success) {
+      console.log(data);
       const settings = data.settings;
 
       // Update UI elements
@@ -1365,6 +1478,11 @@ async function loadCloudSyncSettings() {
       const includeSecretsCheckbox = document.getElementById('cloudIncludeSecrets');
       if (includeSecretsCheckbox) {
         includeSecretsCheckbox.checked = settings.includeSecrets === true;
+      }
+
+      const ignoreSslCheckbox = document.getElementById('cloudIgnoreSslErrors');
+      if (ignoreSslCheckbox) {
+        ignoreSslCheckbox.checked = settings.ignoreSslErrors === true;
       }
 
       // Hide secrets toggle if secrets.yaml is already in exclude_files (making toggle irrelevant)
@@ -1519,6 +1637,7 @@ async function saveCloudSyncSettings(silent = false) {
 
   const pushFrequency = document.getElementById('cloudPushFrequency').value;
   const includeSecrets = document.getElementById('cloudIncludeSecrets').checked;
+  const ignoreSslErrors = document.getElementById('cloudIgnoreSslErrors').checked;
 
   try {
     const payload = {
@@ -1526,6 +1645,7 @@ async function saveCloudSyncSettings(silent = false) {
       remoteUrl,
       pushFrequency,
       includeSecrets,
+      ignoreSslErrors,
       authProvider
     };
     console.log('[saveCloudSyncSettings] Sending payload:', payload);
@@ -1574,7 +1694,10 @@ async function testCloudConnection() {
     const response = await fetch(`${API}/cloud-sync/test`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ remoteUrl })
+      body: JSON.stringify({
+        remoteUrl,
+        ignoreSslErrors: document.getElementById('cloudIgnoreSslErrors').checked
+      })
     });
 
     const data = await response.json();
@@ -1610,7 +1733,10 @@ async function testCustomConnection() {
     const response = await fetch(`${API}/cloud-sync/test`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ remoteUrl })
+      body: JSON.stringify({
+        remoteUrl,
+        ignoreSslErrors: document.getElementById('cloudIgnoreSslErrors').checked
+      })
     });
 
     const data = await response.json();
@@ -2040,7 +2166,7 @@ function getDateBucket(dateString) {
 
   // 5. Current Year -> Month Name (e.g. November)
   if (date.getFullYear() === now.getFullYear()) {
-    return date.toLocaleString('default', { month: 'long' });
+    return date.toLocaleString(undefined, { month: 'long' });
   }
 
   // 6. Previous Years -> Year (e.g. 2024)
@@ -2099,6 +2225,18 @@ function formatDateForLabel(dateString) {
 }
 
 // File path utilities
+function toDisplayPath(repoPath, { leadingSlash = false } = {}) {
+  if (!repoPath) return repoPath;
+  const normalized = String(repoPath).replace(/\\/g, '/').replace(/^\/+/, '');
+  const mirrorPrefix = '.havc_external/';
+
+  if (normalized.startsWith(mirrorPrefix)) {
+    const virtualPath = normalized.substring(mirrorPrefix.length);
+    return leadingSlash ? `/${virtualPath}` : virtualPath;
+  }
+
+  return normalized;
+}
 
 function parseFilePath(filePath) {
   const parts = filePath.split('/');
@@ -2202,7 +2340,8 @@ function filterFiles(query) {
   const filtered = allFiles.filter(fileObj => {
     // Handle both string paths (legacy) and object paths (new format)
     const filePath = typeof fileObj === 'string' ? fileObj : fileObj.path;
-    return filePath.toLowerCase().includes(query);
+    const displayPath = toDisplayPath(filePath);
+    return filePath.toLowerCase().includes(query) || displayPath.toLowerCase().includes(query);
   });
 
   displayFileList(filtered);
@@ -2491,6 +2630,8 @@ async function loadTimeline() {
 
     if (data.success) {
       allCommits = data.log.all;
+      // Update UI with total count for debugging
+      document.getElementById('leftPanelTitle').textContent = `${t('timeline.title')} (${allCommits.length})`;
       await displayCommits(allCommits);
     }
   } catch (error) {
@@ -2620,17 +2761,14 @@ async function displayCommits(commits) {
       // But since our keys are already translated strings from getDateBucket, we can just use the bucket name
       const displayName = bucket;
 
-      // Determine if expanded by default (Today, Yesterday, This Week)
-      const isExpanded = [
-        t('date_buckets.today'),
-        t('date_buckets.yesterday'),
-        t('date_buckets.this_week')
-      ].includes(bucket);
+      // Determine if expanded by default - ALL expanded by default now to avoid confusion
+      const isExpanded = true;
 
       const collapsedClass = isExpanded ? '' : 'collapsed';
+      const groupCollapsedClass = isExpanded ? '' : 'collapsed';
 
       html += `
-            <div class="date-group">
+            <div class="date-group ${groupCollapsedClass}">
               <div class="date-header ${collapsedClass}" onclick="toggleDateGroup('${bucket}')" id="header-${bucket}">
                 ${displayName} (${groups[bucket].length})
               </div>
@@ -2638,15 +2776,7 @@ async function displayCommits(commits) {
           `;
 
       for (const commit of groups[bucket]) {
-        const commitDate = new Date(commit.date);
-        // Use browser default locale
-        const timeString = commitDate.toLocaleString(undefined, {
-          month: 'short',
-          day: 'numeric',
-          year: 'numeric',
-          hour: 'numeric',
-          minute: '2-digit'
-        });
+        const timeString = getFormattedDate(commit.date);
 
         const classified = classifyCommitMessage(commit.message);
         let displayText;
@@ -2713,6 +2843,9 @@ async function displayCommits(commits) {
         const tooltip = commit.body
           ? escapeHtml(displayText + '\n\n' + commit.body)
           : escapeHtml(displayText);
+
+        // Apply toDisplayPath to strip .havc_external/ mirror prefix if present
+        fileName = toDisplayPath(fileName, { leadingSlash: true });
 
         html += `
               <div class="commit" onclick="showCommit('${commit.hash}')" oncontextmenu="showTimelineContextMenu(event, '${commit.hash}')" id="commit-${commit.hash}">
@@ -2816,7 +2949,7 @@ function displayFiles(status, hash) {
   const lines = status.split('\n').filter(line => line.trim());
   const files = lines.slice(1).map(line => {
     const parts = line.split('\t');
-    return { status: parts[0], file: parts[1] };
+    return { status: parts[0], file: parts[1], displayFile: toDisplayPath(parts[1], { leadingSlash: true }) };
   }).filter(f => f.file);
 
   // Set panel title and clear actions
@@ -2832,7 +2965,7 @@ function displayFiles(status, hash) {
         <div class="file">
           <div class="file-icon"></div>
           <div class="file-path">
-            <div class="file-name">${file.file}</div>
+            <div class="file-name">${file.displayFile}</div>
             <div class="file-path-text">${file.status === 'A' ? t('file_status.added') : file.status === 'D' ? t('file_status.deleted') : t('file_status.modified')}</div>
           </div>
           <div>
@@ -2851,7 +2984,7 @@ async function displayCommitDiff(status, hash, diff, commitDate = null) {
   const lines = status.split('\n').filter(line => line.trim());
   let files = lines.slice(1).map(line => {
     const parts = line.split('\t');
-    return { status: parts[0], file: parts[1] };
+    return { status: parts[0], file: parts[1], displayFile: toDisplayPath(parts[1], { leadingSlash: true }) };
   }).filter(f => f.file);
 
   // Sort files alphabetically, ignoring leading dots (so .storage sorts as storage)
@@ -3006,7 +3139,7 @@ async function displayCommitDiff(status, hash, diff, commitDate = null) {
       const diffHtml = generateDiff(leftContent, commitContent, {
         leftLabel: leftLabel,
         rightLabel: rightLabel,
-        bannerText: file.status === 'A' ? `${file.file} (Added)` : file.file,
+        bannerText: file.status === 'A' ? `${file.displayFile} (Added)` : file.displayFile,
         returnNullIfNoChanges: true,
         filePath: file.file
       });
@@ -3040,7 +3173,7 @@ async function displayCommitDiff(status, hash, diff, commitDate = null) {
       allDiffsHtml += `
         <div class="file-diff-section">
           <div class="file-diff-header ${expandedClass}" onclick="toggleFileDiff(this)">
-            <span class="file-name">${item.file.file} (${item.file.status === 'A' ? 'Added' : item.file.status === 'D' ? 'Deleted' : 'Modified'})</span>
+            <span class="file-name">${item.file.displayFile} (${item.file.status === 'A' ? 'Added' : item.file.status === 'D' ? 'Deleted' : 'Modified'})</span>
           </div>
           <div class="file-diff-content" style="${displayStyle}">
             <div class="diff-view-container">
@@ -3071,7 +3204,7 @@ async function displayCommitDiff(status, hash, diff, commitDate = null) {
       allDiffsHtml += `
         <div class="file-diff-section">
           <div class="file-diff-header ${expandedClass}" onclick="toggleFileDiff(this)">
-            <span class="file-name">${item.file.file} (${item.file.status === 'A' ? 'Added' : item.file.status === 'D' ? 'Deleted' : 'Modified'})</span>
+            <span class="file-name">${item.file.displayFile} (${item.file.status === 'A' ? 'Added' : item.file.status === 'D' ? 'Deleted' : 'Modified'})</span>
           </div>
           <div class="file-diff-content" style="${displayStyle}">
             <div class="diff-view-container">
@@ -3107,12 +3240,12 @@ async function displayCommitDiff(status, hash, diff, commitDate = null) {
   // Create header with file list
   const changedFilesSummary = filesWithChanges.map(item => {
     const action = item.file.status === 'A' ? 'Added' : item.file.status === 'D' ? 'Deleted' : 'Modified';
-    return `${item.file.file} (${action})`;
+    return `${item.file.displayFile} (${action})`;
   });
 
   const unchangedFilesSummary = filesWithoutChanges.map(item => {
     const action = item.file.status === 'A' ? 'Added' : item.file.status === 'D' ? 'Deleted' : 'Modified';
-    return `${item.file.file} (${action})`;
+    return `${item.file.displayFile} (${action})`;
   });
 
   const fileSummary = [...changedFilesSummary, ...unchangedFilesSummary].join('<br>') || (showChangedOnly ? t('timeline.no_files_with_changes') : t('timeline.all_files'));
@@ -3277,11 +3410,12 @@ function displayDeletedFiles(files) {
   leftPanel.innerHTML = files.map(file => {
     const lastSeen = getFormattedDate(file.lastSeenDate);
     const fileId = 'deleted-file-' + file.path.replace(/[:/\.]/g, '-');
+    const displayPath = toDisplayPath(file.path, { leadingSlash: true });
     return `
       <div class="file deleted" id="${fileId}" onclick="selectDeletedFile('${escapeHtml(file.path)}', '${file.lastSeenHash}')">
         <div class="file-path">
           <div class="file-name">${escapeHtml(file.name)}</div>
-          <div class="file-path-text">${escapeHtml(file.path.replace(file.name, ''))}</div>
+          <div class="file-path-text">${escapeHtml(displayPath.replace(file.name, ''))}</div>
           <div class="file-last-seen">${t('files.last_seen').replace('{date}', lastSeen)}</div>
         </div>
       </div>
@@ -3425,11 +3559,13 @@ function displayFileList(files) {
   const folderSet = new Set();
 
   files.forEach(fileObj => {
-    // Handle both string paths (legacy/search) and object paths (new format)
-    const filePath = typeof fileObj === 'string' ? fileObj : fileObj.path;
+    // Handle both string paths (legacy/search) and object paths (new format),
+    // while rendering mirrored external files as virtual /share and /media paths.
+    const repoPath = typeof fileObj === 'string' ? fileObj : fileObj.path;
+    const displayPath = toDisplayPath(repoPath);
 
-    if (filePath.startsWith(currentFolder)) {
-      const relativePath = filePath.substring(currentFolder.length);
+    if (displayPath.startsWith(currentFolder)) {
+      const relativePath = displayPath.substring(currentFolder.length);
       const parts = relativePath.split('/');
       if (parts.length > 1) {
         // It's in a subfolder
@@ -3447,7 +3583,7 @@ function displayFileList(files) {
         items.push({
           name: relativePath,
           type: 'file',
-          path: filePath
+          path: repoPath
         });
       }
     }
@@ -3714,7 +3850,7 @@ function displayAutomations(automations) {
     html = `<div class="empty">${t('automations.empty_state')}</div>`;
   } else {
     automations.forEach(auto => {
-      const autoId = 'auto-' + auto.id.replace(/[:/]/g, '-');
+      const autoId = 'auto-' + auto.id.replace(/[:/\.]/g, '-');
       html += `
             <div class="file" onclick="showAutomationHistory('${auto.id}')" id="${autoId}">
               <div class="file-icon"></div>
@@ -3746,7 +3882,7 @@ async function showAutomationHistory(automationId) {
   if (sortState.automations === 'deleted') {
     autoId = 'deleted-auto-' + automationId.replace(/[:/\.]/g, '-');
   } else {
-    autoId = 'auto-' + automationId.replace(/[:/]/g, '-');
+    autoId = 'auto-' + automationId.replace(/[:/\.]/g, '-');
   }
 
   const element = document.getElementById(autoId);
@@ -4011,7 +4147,10 @@ async function loadAutomationHistoryDiff() {
     rightLabel = formatDateForBanner(currentCommit.date);
   }
 
-  const startLine = (auto && auto.line) ? (auto.line - 1) : 0;
+  // NOTE: startLineOffset must be 0 here. The diff compares the isolated YAML
+  // of a single automation (not the full automations.yaml file), so line numbers
+  // always start at 1. Using auto.line (live file position) was WRONG — it shifts
+  // after automations are deleted, causing diffs to show the wrong automation's content.
 
   // renderDiff expects (commitContent, currentContent) and calls generateDiff(currentContent, commitContent)
   // i.e. generateDiff(Left, Right)
@@ -4019,7 +4158,7 @@ async function loadAutomationHistoryDiff() {
   const diffHtml = renderDiff(rightContent, leftContent, document.getElementById('automationDiffContent'), {
     leftLabel: leftLabel,
     rightLabel: rightLabel,
-    startLineOffset: startLine,
+    startLineOffset: 0,
     filePath: 'automations.yaml'
   });
 
@@ -4066,7 +4205,7 @@ function displayScripts(scripts) {
     html = `<div class="empty">${t('scripts.empty_state')}</div>`;
   } else {
     scripts.forEach(script => {
-      const scriptId = 'script-' + script.id.replace(/[:/]/g, '-');
+      const scriptId = 'script-' + script.id.replace(/[:/\.]/g, '-');
       html += `
             <div class="file" onclick="showScriptHistory('${script.id}')" id="${scriptId}">
               <div class="file-icon"></div>
@@ -4098,7 +4237,7 @@ async function showScriptHistory(scriptId) {
   if (sortState.scripts === 'deleted') {
     scriptElId = 'deleted-script-' + scriptId.replace(/[:/\.]/g, '-');
   } else {
-    scriptElId = 'script-' + scriptId.replace(/[:/]/g, '-');
+    scriptElId = 'script-' + scriptId.replace(/[:/\.]/g, '-');
   }
 
   const element = document.getElementById(scriptElId);
@@ -4359,14 +4498,17 @@ async function loadScriptHistoryDiff() {
     rightLabel = formatDateForBanner(currentCommit.date);
   }
 
-  const startLine = (script && script.line) ? (script.line - 1) : 0;
+  // NOTE: startLineOffset must be 0 here. The diff compares the isolated YAML
+  // of a single script (not the full scripts.yaml file), so line numbers
+  // always start at 1. Using script.line (live file position) was WRONG — it shifts
+  // after scripts are deleted, causing diffs to show the wrong script's content.
 
   // renderDiff expects (commitContent, currentContent) -> generateDiff(currentContent, commitContent)
   // So we pass (Right, Left) to renderDiff
   const diffHtml = renderDiff(rightContent, leftContent, document.getElementById('scriptDiffContent'), {
     leftLabel: leftLabel,
     rightLabel: rightLabel,
-    startLineOffset: startLine,
+    startLineOffset: 0,
     filePath: 'scripts.yaml'
   });
 
@@ -4576,7 +4718,7 @@ function displayFileHistory(filePath) {
   }
 
   // Set the panel title - add "(Deleted)" if viewing a deleted file, or "(Added)" if the file was added
-  let title = filePath;
+  let title = toDisplayPath(filePath, { leadingSlash: true });
   if (currentSelection && currentSelection.type === 'deleted_file') {
     title += ' (Deleted)';
   } else if (currentFileHistory.length > 0) {
@@ -4780,8 +4922,12 @@ async function restoreFileVersion(filePath) {
         showNotification(message, 'success');
       }
 
-      // Reload the file history to show the new commit
-      showFileHistory(filePath);
+      triggerConfetti();
+
+      // Yield to the browser so the confetti has time to render before heavy diff generation
+      setTimeout(() => {
+        showFileHistory(filePath);
+      }, 50);
     } else {
       showNotification('Error: ' + data.error, 'error');
     }
@@ -4846,8 +4992,11 @@ async function restoreAutomationVersion(automationId) {
       const key = data.reloaded ? 'automations.automation_restored_reloaded' : 'automations.automation_restored';
       const message = t(key).replace('{name}', auto.name);
       showNotification(message);
-      // Reload automations
-      loadAutomations();
+      triggerConfetti();
+      // Yield to the browser so the confetti has time to render
+      setTimeout(() => {
+        loadAutomations();
+      }, 50);
     } else {
       showNotification('Error: ' + data.error, 'error');
     }
@@ -4885,8 +5034,11 @@ async function restoreScriptVersion(scriptId) {
       const key = data.reloaded ? 'scripts.script_restored_reloaded' : 'scripts.script_restored';
       const message = t(key).replace('{name}', script.name);
       showNotification(message);
-      // Reload scripts
-      loadScripts();
+      triggerConfetti();
+      // Yield to the browser so the confetti has time to render
+      setTimeout(() => {
+        loadScripts();
+      }, 50);
     } else {
       showNotification('Error: ' + data.error, 'error');
     }
@@ -5886,7 +6038,7 @@ async function showCommitRestorePreview(commitHash, commitDate) {
     const lines = detailsData.status.split('\n').filter(line => line.trim());
     const files = lines.slice(1).map(line => {
       const parts = line.split('\t');
-      return { status: parts[0], file: parts[1] };
+      return { status: parts[0], file: parts[1], displayFile: toDisplayPath(parts[1], { leadingSlash: true }) };
     }).filter(f => f.file);
 
     // For each file, get current content and commit version, then compare
@@ -5913,7 +6065,7 @@ async function showCommitRestorePreview(commitHash, commitDate) {
         if (diffHtml.trim()) {
           allDiffsHtml += `<div class="diff-view-container">
                 <div style="color: var(--text-secondary); font-size: 12px; margin-bottom: 8px; font-weight: bold;">
-                  ${file.file} (${file.status === 'A' ? 'Added' : file.status === 'D' ? 'Deleted' : 'Modified'})
+                  ${file.displayFile} (${file.status === 'A' ? 'Added' : file.status === 'D' ? 'Deleted' : 'Modified'})
                 </div>
                 ${diffHtml}
               </div>`;
@@ -5962,7 +6114,7 @@ async function doRestore() {
 
       if (data.success) {
         const key = data.reloaded ? 'timeline.single_file_restored_reloaded' : 'timeline.single_file_restored';
-        const message = t(key).replace('{file}', filePath);
+        const message = t(key).replace('{file}', toDisplayPath(filePath, { leadingSlash: true }));
 
         // Check if it's a Lovelace file and offer restart
         if (filePath.includes('.storage/lovelace')) {
@@ -5974,6 +6126,7 @@ async function doRestore() {
           showNotification(message, 'success');
         }
 
+        triggerConfetti();
         closeRestorePreview();
         refreshCurrent();
       } else {
@@ -5991,7 +6144,7 @@ async function doRestore() {
       if (data.success) {
         // Build message based on what was reloaded
         const files = data.files || [];
-        const fileNames = files.join(', ');
+        const fileNames = files.map(f => toDisplayPath(f, { leadingSlash: true })).join(', ');
 
         let message;
         if (data.automationReloaded || data.scriptReloaded) {
@@ -6003,6 +6156,7 @@ async function doRestore() {
         }
 
         showNotification(message);
+        triggerConfetti();
         closeRestorePreview();
         refreshCurrent();
       } else {
@@ -6022,6 +6176,7 @@ async function doRestore() {
         const key = data.reloaded ? 'automations.automation_restored_reloaded' : 'automations.automation_restored';
         const message = t(key).replace('{name}', auto ? auto.name : automationId);
         showNotification(message);
+        triggerConfetti();
         closeRestorePreview();
         loadAutomations();
       } else {
@@ -6041,6 +6196,7 @@ async function doRestore() {
         const key = data.reloaded ? 'scripts.script_restored_reloaded' : 'scripts.script_restored';
         const message = t(key).replace('{name}', script ? script.name : scriptId);
         showNotification(message);
+        triggerConfetti();
         closeRestorePreview();
         loadScripts();
       } else {
@@ -6054,6 +6210,7 @@ async function doRestore() {
     showNotification('Error restoring: ' + error.message, 'error');
   }
 }
+
 
 
 async function confirmRestore(file, hash) {
@@ -6081,6 +6238,7 @@ async function confirmRestore(file, hash) {
         });
       } else {
         showNotification(message, 'success');
+        triggerConfetti();
       }
 
       closeModal();
@@ -6127,6 +6285,7 @@ async function restoreFile(file, hash) {
         });
       } else {
         showNotification(message, 'success');
+        triggerConfetti();
       }
 
       refreshCurrent();
@@ -6160,7 +6319,7 @@ async function restoreCommit(sourceHash, targetHash) {
         const filePath = data.files[0];
         // Use full path or relative path, not just filename to be more descriptive
         const key = isReloaded ? 'timeline.single_file_restored_reloaded' : 'timeline.single_file_restored';
-        message = t(key).replace('{file}', filePath);
+        message = t(key).replace('{file}', toDisplayPath(filePath, { leadingSlash: true }));
 
         // Check if it's a Lovelace file and offer restart
         if (filePath.includes('.storage/lovelace')) {
@@ -6168,6 +6327,7 @@ async function restoreCommit(sourceHash, targetHash) {
             label: 'Restart Home Assistant',
             callback: restartHomeAssistant
           });
+          triggerConfetti();
           refreshCurrent();
           return; // Exit early since we handled notification
         }
@@ -6183,6 +6343,7 @@ async function restoreCommit(sourceHash, targetHash) {
             label: 'Restart Home Assistant',
             callback: restartHomeAssistant
           });
+          triggerConfetti();
           refreshCurrent();
           return; // Exit early
         }
@@ -6192,6 +6353,7 @@ async function restoreCommit(sourceHash, targetHash) {
       }
 
       showNotification(message, 'success');
+      triggerConfetti();
       refreshCurrent();
     } else {
       showNotification('Error: ' + data.error, 'error');
@@ -6279,18 +6441,7 @@ function showHardResetConfirmation(hash) {
 
   let formattedDate = 'Unknown';
   if (commit) {
-    const dateObj = new Date(commit.date);
-    // Format: Nov 26 2025 7:30:51 AM (remove commas)
-    const options = {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: 'numeric',
-      second: 'numeric',
-      hour12: true
-    };
-    formattedDate = dateObj.toLocaleString('en-US', options).replace(/,/g, '');
+    formattedDate = getFormattedDate(commit.date);
   }
 
   // Create minimal modal HTML
@@ -6354,6 +6505,8 @@ async function confirmHardReset(hash) {
         5000
       );
 
+      triggerConfetti();
+
       // Refresh the view
       setTimeout(() => {
         window.location.reload();
@@ -6402,200 +6555,157 @@ function stepInput(id, step) {
 }
 
 // ========================================
-// HOLIDAY MODE FUNCTIONS
+// CONFETTI MODE FUNCTIONS
 // ========================================
 
-// Snowflake characters for variety
-const SNOWFLAKE_CHARS = ['❄', '❅', '❆', '✻', '✼', '❉'];
 
-// Number of snowflakes
-const SNOWFLAKE_COUNT = 28;
-
-// 10 Plaid Christmas Wrapping Paper Patterns (original style with color variations)
-const PLAID_PATTERNS = [
-  {
-    name: 'Classic Red & Green',
-    baseColor: '#8B1A1A', accentColor: 'rgba(0, 80, 0, 0.5)', threadColor: 'rgba(212, 175, 55, 0.25)'
-  },
-  {
-    name: 'Forest Green & Red',
-    baseColor: '#0D3D0D', accentColor: 'rgba(139, 26, 26, 0.5)', threadColor: 'rgba(212, 175, 55, 0.25)'
-  },
-  {
-    name: 'Royal Blue & Gold',
-    baseColor: '#0D47A1', accentColor: 'rgba(212, 175, 55, 0.4)', threadColor: 'rgba(255, 255, 255, 0.2)'
-  },
-  {
-    name: 'Burgundy & Gold',
-    baseColor: '#4A0E0E', accentColor: 'rgba(212, 175, 55, 0.4)', threadColor: 'rgba(255, 255, 255, 0.15)'
-  },
-  {
-    name: 'Winter Navy',
-    baseColor: '#1A237E', accentColor: 'rgba(255, 255, 255, 0.3)', threadColor: 'rgba(100, 149, 237, 0.3)'
-  },
-  {
-    name: 'Holly Berry',
-    baseColor: '#1B5E20', accentColor: 'rgba(200, 40, 40, 0.5)', threadColor: 'rgba(255, 255, 255, 0.2)'
-  },
-  {
-    name: 'Silver Frost',
-    baseColor: '#37474F', accentColor: 'rgba(255, 255, 255, 0.25)', threadColor: 'rgba(100, 200, 255, 0.2)'
-  },
-  {
-    name: 'Cranberry',
-    baseColor: '#880E4F', accentColor: 'rgba(255, 255, 255, 0.25)', threadColor: 'rgba(255, 182, 193, 0.3)'
-  },
-  {
-    name: 'Gold Luxe',
-    baseColor: '#8B6914', accentColor: 'rgba(139, 26, 26, 0.4)', threadColor: 'rgba(255, 255, 255, 0.2)'
-  },
-  {
-    name: 'Purple Velvet',
-    baseColor: '#4A148C', accentColor: 'rgba(212, 175, 55, 0.35)', threadColor: 'rgba(255, 255, 255, 0.2)'
-  }
-];
-
-// Generate plaid pattern from color scheme
-function generatePlaidPattern(pattern, size, angle, intensity) {
-  const { baseColor, accentColor, threadColor } = pattern;
-  // intensity 0 = solid color, 100 = full gradient
-  const gradientStrength = (intensity || 50) / 100 * 30; // max 30% lighten/darken
-  return `
-    repeating-linear-gradient(
-      0deg,
-      transparent 0px,
-      transparent ${size}px,
-      ${accentColor} ${size}px,
-      ${accentColor} ${size + 4}px,
-      transparent ${size + 4}px,
-      transparent ${size * 2}px,
-      ${threadColor} ${size * 2}px,
-      ${threadColor} ${size * 2 + 2}px,
-      transparent ${size * 2 + 2}px
-    ),
-    repeating-linear-gradient(
-      90deg,
-      transparent 0px,
-      transparent ${size}px,
-      ${accentColor} ${size}px,
-      ${accentColor} ${size + 4}px,
-      transparent ${size + 4}px,
-      transparent ${size * 2}px,
-      ${threadColor} ${size * 2}px,
-      ${threadColor} ${size * 2 + 2}px,
-      transparent ${size * 2 + 2}px
-    ),
-    linear-gradient(${angle}deg, ${baseColor} 0%, ${lightenColor(baseColor, gradientStrength)} 25%, ${baseColor} 50%, ${darkenColor(baseColor, gradientStrength)} 75%, ${baseColor} 100%)
-  `;
-}
-
-// Helper to lighten a hex color
-function lightenColor(hex, percent) {
-  const num = parseInt(hex.replace('#', ''), 16);
-  const amt = Math.round(2.55 * percent);
-  const R = Math.min(255, (num >> 16) + amt);
-  const G = Math.min(255, ((num >> 8) & 0x00FF) + amt);
-  const B = Math.min(255, (num & 0x0000FF) + amt);
-  return '#' + (0x1000000 + R * 0x10000 + G * 0x100 + B).toString(16).slice(1);
-}
-
-// Helper to darken a hex color
-function darkenColor(hex, percent) {
-  const num = parseInt(hex.replace('#', ''), 16);
-  const amt = Math.round(2.55 * percent);
-  const R = Math.max(0, (num >> 16) - amt);
-  const G = Math.max(0, ((num >> 8) & 0x00FF) - amt);
-  const B = Math.max(0, (num & 0x0000FF) - amt);
-  return '#' + (0x1000000 + R * 0x10000 + G * 0x100 + B).toString(16).slice(1);
-}
-
-// Helper to blend two colors (0 = color1, 1 = color2)
-function blendColors(color1, color2, ratio) {
-  const c1 = parseInt(color1.replace('#', ''), 16);
-  const c2 = parseInt(color2.replace('#', ''), 16);
-  const R = Math.round((c1 >> 16) * (1 - ratio) + (c2 >> 16) * ratio);
-  const G = Math.round(((c1 >> 8) & 0xFF) * (1 - ratio) + ((c2 >> 8) & 0xFF) * ratio);
-  const B = Math.round((c1 & 0xFF) * (1 - ratio) + (c2 & 0xFF) * ratio);
-  return '#' + (0x1000000 + R * 0x10000 + G * 0x100 + B).toString(16).slice(1);
-}
-
-// Toggle Winter Mode
-function toggleWinterMode() {
-  const checkbox = document.getElementById('winterMode');
-  // Since onclick fires before the checkbox value changes, we check the OPPOSITE
+// Toggle Confetti Mode preference (saves to localStorage only; no visual effect on toggle)
+function toggleConfettiMode() {
+  const checkbox = document.getElementById('confettiMode');
+  // onclick fires before checkbox toggles, so check the OPPOSITE
   const willBeEnabled = !checkbox.checked;
-
-  if (willBeEnabled) {
-    document.body.classList.add('winter-mode');
-    createSnowflakes();
-    localStorage.setItem('winterModeEnabled', 'true');
-  } else {
-    document.body.classList.remove('winter-mode');
-    clearSnowflakes();
-    localStorage.setItem('winterModeEnabled', 'false');
-  }
+  localStorage.setItem('confettiModeEnabled', willBeEnabled ? 'true' : 'false');
 }
 
-// Initialize Winter Mode from localStorage
-function initWinterMode() {
-  const saved = localStorage.getItem('winterModeEnabled');
-  const checkbox = document.getElementById('winterMode');
-
-  if (saved === 'true') {
+// Initialize Confetti Mode from localStorage (defaults to off)
+function initConfettiMode() {
+  const saved = localStorage.getItem('confettiModeEnabled');
+  const checkbox = document.getElementById('confettiMode');
+  if (checkbox && saved === 'true') {
     checkbox.checked = true;
-    document.body.classList.add('winter-mode');
-    createSnowflakes();
   }
 }
 
-// Create snowflakes
-function createSnowflakes() {
-  const container = document.getElementById('snowContainer');
+// Returns true if confetti mode is currently enabled
+function isConfettiModeEnabled() {
+  return localStorage.getItem('confettiModeEnabled') === 'true';
+}
+
+/**
+ * triggerConfetti() — realistic falling confetti.
+ *
+ * Physics model (same approach as canvas-confetti):
+ *   • Each piece has an initial (vx, vy) velocity that decays with drag each step
+ *   • Gravity increments vy every step → smooth accelerating fall
+ *   • The visual "flutter" of a paper piece is a rotateY wobble (face→edge→back)
+ *     NOT lateral position oscillation (which causes the zigzag)
+ *   • rotateZ adds a gentle lazy 2-D spin
+ */
+function triggerConfetti() {
+  if (!isConfettiModeEnabled()) return;
+
+  const container = document.getElementById('confettiContainer');
   if (!container) return;
 
-  // Clear existing snowflakes first
-  container.innerHTML = '';
+  // Perspective on the container makes rotateY look truly 3-D
+  container.style.perspective = '700px';
 
-  for (let i = 0; i < SNOWFLAKE_COUNT; i++) {
-    const snowflake = document.createElement('div');
-    snowflake.className = 'snowflake';
+  const COUNT = 250;
+  const W     = window.innerWidth;
+  const H     = window.innerHeight;
 
-    // Random snowflake character
-    snowflake.textContent = SNOWFLAKE_CHARS[Math.floor(Math.random() * SNOWFLAKE_CHARS.length)];
+  const SHAPES = ['rect', 'rect', 'rect', 'rect', 'circle', 'streamer'];
 
-    // Random horizontal position
-    snowflake.style.left = Math.random() * 100 + '%';
+  const COLORS = [
+    '#ff6b6b','#ff4757','#f9ca24','#f0932b',
+    '#6ab04c','#badc58','#22a6b3','#30336b',
+    '#be2edd','#e056fd','#ff9ff3','#54a0ff',
+    '#ff6348','#ffd32a','#0abde3','#10ac84',
+    '#ff9f43','#ee5a24','#c0392b','#8e44ad'
+  ];
 
-    // Random size (small variation for graceful look)
-    const size = 8 + Math.random() * 8; // 8-16px
-    snowflake.style.fontSize = size + 'px';
+  for (let i = 0; i < COUNT; i++) {
+    const el    = document.createElement('div');
+    const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+    const shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
 
-    // Random animation duration (slow, graceful: 10-18 seconds)
-    const duration = 10 + Math.random() * 8;
-    snowflake.style.animationDuration = duration + 's';
+    let w, h;
+    if (shape === 'circle') {
+      w = h = 5 + Math.random() * 7;
+    } else if (shape === 'streamer') {
+      w = 2 + Math.random() * 2;
+      h = 14 + Math.random() * 18;
+    } else {
+      w = 9 + Math.random() * 9;   // landscape rect — wider than tall
+      h = 4 + Math.random() * 5;
+    }
 
-    // Staggered animation delay (so they don't all start at once)
-    const delay = Math.random() * 15;
-    snowflake.style.animationDelay = delay + 's';
+    const startX = Math.random() * W;
+    const startY = -(h + Math.random() * 400); // spread across 400px height for staggered entry
 
-    // Random animation type for variety
-    const animations = ['snowfall', 'snowfall-alt1', 'snowfall-alt2'];
-    snowflake.style.animationName = animations[Math.floor(Math.random() * animations.length)];
+    el.style.cssText = `
+      position: absolute;
+      left: ${startX}px;
+      top: ${startY}px;
+      width: ${w}px;
+      height: ${h}px;
+      background: ${color};
+      border-radius: ${shape === 'circle' ? '50%' : '1px'};
+      pointer-events: none;
+      will-change: transform, opacity;
+      transform-origin: center center;
+    `;
 
-    // Slight opacity variation
-    snowflake.style.opacity = 0.6 + Math.random() * 0.4;
+    container.appendChild(el);
 
-    container.appendChild(snowflake);
+    // ── Physics constants ────────────────────────────────────────────────────
+    const GRAVITY      = 0.8;    // downward acceleration
+    const DRAG         = 0.96;   // air resistance
+    const STEPS        = 120;    // more steps for full-screen fall
+
+    // Initial velocity — larger spread
+    let vx = (Math.random() - 0.5) * 15;  // px per step
+    let vy = 1 + Math.random() * 3;        // px per step
+
+    // Visual rotation — purely decorative, does NOT affect position
+    const wobbleSpeed  = (2 + Math.random() * 4) * (Math.random() < 0.5 ? 1 : -1);
+    const wobbleStart  = Math.random() * 360; // deg, random start angle
+    const spinZTotal   = (Math.random() - 0.5) * 160; 
+
+    // Timing
+    const duration = 2000 + Math.random() * 2000;
+    const delay    = Math.random() * 800;
+
+    // ── Build keyframes via Euler integration ────────────────────────────────
+    const keyframes = [];
+    let px = 0, py = 0;
+
+    for (let s = 0; s <= STEPS; s++) {
+      const p = s / STEPS; // 0 → 1
+
+      if (s > 0) {
+        vx *= DRAG;
+        vy *= DRAG;
+        vy += GRAVITY;
+        px += vx;
+        py += vy;
+      }
+
+      // rotateY: the paper-flip wobble (face→edge→back of piece)
+      const rotY = wobbleStart + wobbleSpeed * s * 6;
+      // rotateZ: slow in-plane tumble
+      const rotZ = spinZTotal * p;
+
+      // Opacity: stay solid, gentle fade-out at bottom
+      const opacity = p > 0.8 ? (1 - p) / 0.2 : 1;
+
+      keyframes.push({
+        transform: `translate(${px}px, ${py}px) rotateY(${rotY}deg) rotateZ(${rotZ}deg)`,
+        opacity,
+        offset: p
+      });
+    }
+
+    el.animate(keyframes, {
+      duration,
+      delay,
+      easing:    'linear',
+      fill:      'forwards',
+      composite: 'replace'
+    }).onfinish = () => el.remove();
   }
 }
 
-// Clear snowflakes
-function clearSnowflakes() {
-  const container = document.getElementById('snowContainer');
-  if (container) {
-    container.innerHTML = '';
-  }
-}
 
 async function handleCloudProviderChange() {
   const isGithub = document.getElementById('cloudProviderGithub').checked;
@@ -6677,13 +6787,7 @@ function showTimelineContextMenu(event, commitHash) {
 
   // Get commit info for display
   const commit = allCommits.find(c => c.hash === commitHash);
-  const commitDate = commit ? new Date(commit.date).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  }) : commitHash.substring(0, 8);
+  const commitDate = commit ? getFormattedDate(commit.date) : commitHash.substring(0, 8);
 
   // Count commits that will be removed
   const commitIndex = allCommits.findIndex(c => c.hash === commitHash);
@@ -6737,17 +6841,7 @@ function confirmSoftReset(commitHash, commitsToRemove) {
   const commit = allCommits.find(c => c.hash === commitHash);
   let formattedDate = 'Unknown';
   if (commit) {
-    const dateObj = new Date(commit.date);
-    const options = {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: 'numeric',
-      second: 'numeric',
-      hour12: true
-    };
-    formattedDate = dateObj.toLocaleString('en-US', options).replace(/,/g, '');
+    formattedDate = getFormattedDate(commit.date);
   }
 
   // Check if this is the most recent commit

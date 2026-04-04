@@ -109,6 +109,65 @@ export async function getConfigFilePaths(configPath) {
 }
 
 /**
+ * Helper to parse the identifier from an ID string, reconstructing it if it contained colons
+ * @param {string} fullId - The full ID string (e.g. 'automations:path/to/file.yaml:identifier')
+ * @returns {Object} Object with filePath and identifier
+ */
+function parseId(fullId) {
+  const parts = fullId.split(':');
+  const { type, filePath, encodedPath, identifier } = { 
+    type: parts[0], 
+    filePath: decodeURIComponent(parts[1] || '').replace(/^\//, ''), 
+    encodedPath: parts[1] || '', 
+    identifier: decodeURIComponent(parts.slice(2).join(':')) 
+  };
+  console.log(`[parseId] type=${type}, identifier=${identifier}, filePath=${filePath}`);
+  return { type, filePath, encodedPath, identifier };
+}
+
+/**
+ * Helper to find an item in a collection by string-matching ID or alias, falling back to index
+ */
+function findItemByIdentifier(collection, identifier, isArray) {
+  if (isArray) {
+    // 1. Try to find by UUID (stringified to handle numeric IDs parsed as numbers by js-yaml)
+    let found = collection.find(item => item && String(item.id) === String(identifier));
+    if (found) {
+      console.log(`[findItemByIdentifier] Found by ID: "${identifier}"`);
+      return found;
+    }
+    // 2. Try to find by alias (fallback identifier) - Case-insensitive
+    found = collection.find(item => item && item.alias && String(item.alias).toLowerCase() === String(identifier).toLowerCase());
+    if (found) {
+      console.log(`[findItemByIdentifier] Found by Alias: "${identifier}"`);
+      return found;
+    }
+    // 3. Fallback to index ONLY if identifier is purely numeric
+    if (/^\d+$/.test(String(identifier))) {
+      const idx = parseInt(identifier);
+      if (idx >= 0 && idx < collection.length) {
+        console.log(`[findItemByIdentifier] Falling back to Index: ${idx} for identifier: "${identifier}"`);
+        return collection[idx];
+      }
+    }
+    
+    // Debug output to help understand failures
+    console.log(`[findItemByIdentifier] NOT FOUND for identifier: "${identifier}". Available aliases: ${collection.slice(0, 5).map(i => i?.alias).join(', ')}...`);
+  } else { // Object
+    const values = Object.values(collection);
+    // 1. Try to find by UUID (values)
+    let found = values.find(item => item && String(item.id) === String(identifier));
+    if (found) return found;
+    // 2. Try to find by alias (values)
+    found = values.find(item => item && String(item.alias) === String(identifier));
+    if (found) return found;
+    // 3. Fallback to key
+    return collection[identifier];
+  }
+  return null;
+}
+
+/**
  * Helper to find the start line of an automation or script
  */
 function findStartLine(lines, item) {
@@ -176,9 +235,9 @@ export async function extractAutomations(configPath = null) {
             if (Array.isArray(data.automations)) {
               data.automations.forEach((auto, index) => {
                 if (auto.alias) {
-                  // Use UUID if available, otherwise fall back to index
-                  // Format: automations:FILE:UUID_OR_INDEX
-                  const uniqueId = auto.id || index;
+                  // Use UUID if available, then fallback to alias, then index
+                  // Format: automations:FILE:UUID_OR_ALIAS_OR_INDEX
+                  const uniqueId = auto.id || auto.alias || index;
 
                   automations.push({
                     id: `automations:${encodeURIComponent(relativeToConfigPath)}:${uniqueId}`,
@@ -199,8 +258,8 @@ export async function extractAutomations(configPath = null) {
               // Object format
               Object.keys(data.automations).forEach(autoName => {
                 const auto = data.automations[autoName];
-                // Use UUID if available, otherwise fall back to key name
-                const uniqueId = auto.id || autoName;
+                // Use UUID if available, then fallback to alias, then key name
+                const uniqueId = auto.id || auto.alias || autoName;
 
                 automations.push({
                   id: `automations:${encodeURIComponent(relativeToConfigPath)}:${uniqueId}`,
@@ -222,7 +281,7 @@ export async function extractAutomations(configPath = null) {
             if (Array.isArray(data)) {
               data.forEach((auto, index) => {
                 if (auto && typeof auto === 'object' && auto.alias) {
-                  const uniqueId = auto.id || index;
+                  const uniqueId = auto.id || auto.alias || index;
                   automations.push({
                     id: `automations:${encodeURIComponent(relativeToConfigPath)}:${uniqueId}`,
                     rawId: auto.id,
@@ -247,7 +306,7 @@ export async function extractAutomations(configPath = null) {
 
                   // If it has triggers, it's an automation
                   if (hasTriggers) {
-                    const uniqueId = auto.id || key;
+                    const uniqueId = auto.id || auto.alias || key;
                     automations.push({
                       id: `automations:${encodeURIComponent(relativeToConfigPath)}:${uniqueId}`,
                       rawId: auto.id,
@@ -317,7 +376,9 @@ export async function extractScripts(configPath = null) {
             if (Array.isArray(data.scripts)) {
               data.scripts.forEach((script, index) => {
                 if (script.alias) {
-                  const uniqueId = script.id || index;
+                  // Use UUID if available, then fallback to alias, then index
+                  // Format: scripts:FILE:UUID_OR_ALIAS_OR_INDEX
+                  const uniqueId = script.id || script.alias || index;
                   scripts.push({
                     id: `scripts:${encodeURIComponent(relativeToConfigPath)}:${uniqueId}`,
                     rawId: script.id,
@@ -336,7 +397,7 @@ export async function extractScripts(configPath = null) {
               // Object format
               Object.keys(data.scripts).forEach(scriptName => {
                 const script = data.scripts[scriptName];
-                const uniqueId = script.id || scriptName;
+                const uniqueId = script.id || script.alias || scriptName;
                 scripts.push({
                   id: `scripts:${encodeURIComponent(relativeToConfigPath)}:${uniqueId}`,
                   rawId: script.id,
@@ -365,7 +426,7 @@ export async function extractScripts(configPath = null) {
 
                 // If it has sequence but NOT triggers, it's a script
                 if (hasSequence && !hasTriggers) {
-                  const uniqueId = script.id || key;
+                  const uniqueId = script.id || script.alias || key;
                   scripts.push({
                     id: `scripts:${encodeURIComponent(relativeToConfigPath)}:${uniqueId}`,
                     rawId: script.id,
@@ -482,11 +543,12 @@ async function findYamlFiles(type) {
 /**
  * Get the history of changes for a specific automation
  * @param {string} automationId - The automation ID
+ * @param {string} configPath - The config path
+ * @param {Object} options - Optional parameters
  * @returns {Array} List of commits that affected this automation
  */
-export async function getAutomationHistory(automationId, configPath) {
-  const [, encodedPath, identifier] = automationId.split(':');
-  const gitFilePath = decodeURIComponent(encodedPath).replace(/^\//, '');
+export async function getAutomationHistory(automationId, configPath, options = {}) {
+  const { filePath: gitFilePath, identifier } = parseId(automationId);
   const commits = [];
   const debugMessages = [];
 
@@ -513,7 +575,11 @@ export async function getAutomationHistory(automationId, configPath) {
       debugMessages.push(`[getAutomationHistory] File ${gitFilePath} is not currently tracked (might be deleted). Continuing to check logs.`);
     }
 
-    const log = await gitLog({ file: gitFilePath });
+    const logOptions = { file: gitFilePath };
+    if (options.maxCount) {
+      logOptions.maxCount = options.maxCount;
+    }
+    const log = await gitLog(logOptions);
     debugMessages.push(`[getAutomationHistory] Found ${log.all.length} commits for file ${gitFilePath}`);
 
     if (log.all.length === 0) {
@@ -532,41 +598,12 @@ export async function getAutomationHistory(automationId, configPath) {
 
         let auto = null;
         if (data) {
-          // Helper to find by ID or Key/Index
-          const findAutomation = (collection, isArray) => {
-            if (isArray) {
-              // Try to find by UUID first
-              const found = collection.find(item => item && item.id === identifier);
-              if (found) return found;
-              // Fallback to index if identifier is numeric
-              if (!isNaN(parseInt(identifier))) {
-                return collection[parseInt(identifier)];
-              }
-            } else { // Object
-              // Try to find by UUID first (values)
-              const found = Object.values(collection).find(item => item && item.id === identifier);
-              if (found) return found;
-              // Fallback to key
-              return collection[identifier];
-            }
-            return null;
-          };
-
           if (data.automations) {
-            if (Array.isArray(data.automations)) {
-              auto = findAutomation(data.automations, true);
-              debugMessages.push(`[getAutomationHistory] Array lookup for ${identifier}: ${!!auto}`);
-            } else {
-              auto = findAutomation(data.automations, false);
-              debugMessages.push(`[getAutomationHistory] Object lookup for ${identifier}: ${!!auto}`);
-            }
+            auto = findItemByIdentifier(data.automations, identifier, Array.isArray(data.automations));
+            debugMessages.push(`[getAutomationHistory] Array/Object lookup for ${identifier}: ${!!auto}`);
           } else {
             // Standard Home Assistant format (root level array or object)
-            if (Array.isArray(data)) {
-              auto = findAutomation(data, true);
-            } else {
-              auto = findAutomation(data, false);
-            }
+            auto = findItemByIdentifier(data, identifier, Array.isArray(data));
             debugMessages.push(`[getAutomationHistory] Root lookup for ${identifier}: ${!!auto}`);
           }
         } else {
@@ -638,11 +675,11 @@ export async function getAutomationHistory(automationId, configPath) {
  * This enables progressive loading by returning commit list quickly
  * @param {string} automationId - The automation ID
  * @param {string} configPath - The config path
+ * @param {Object} options - Optional parameters
  * @returns {Object} List of commit metadata (hash, date, message)
  */
-export async function getAutomationHistoryMetadata(automationId, configPath) {
-  const [, encodedPath, identifier] = automationId.split(':');
-  const gitFilePath = decodeURIComponent(encodedPath).replace(/^\//, '');
+export async function getAutomationHistoryMetadata(automationId, configPath, options = {}) {
+  const { filePath: gitFilePath, identifier } = parseId(automationId);
 
   try {
     const isRepo = await gitCheckIsRepo();
@@ -650,7 +687,11 @@ export async function getAutomationHistoryMetadata(automationId, configPath) {
       return { success: false, commits: [], error: 'Not a Git repository' };
     }
 
-    const log = await gitLog({ file: gitFilePath });
+    const logOptions = { file: gitFilePath };
+    if (options.maxCount) {
+      logOptions.maxCount = options.maxCount;
+    }
+    const log = await gitLog(logOptions);
 
     if (log.all.length === 0) {
       return { success: false, commits: [], error: 'No history found' };
@@ -684,8 +725,7 @@ export async function getAutomationHistoryMetadata(automationId, configPath) {
  * @returns {Object} The automation content at that commit
  */
 export async function getAutomationAtCommit(automationId, commitHash, configPath) {
-  const [, encodedPath, identifier] = automationId.split(':');
-  const gitFilePath = decodeURIComponent(encodedPath).replace(/^\//, '');
+  const { filePath: gitFilePath, identifier } = parseId(automationId);
 
   try {
     const content = await gitShowFileAtCommit(commitHash, gitFilePath);
@@ -695,27 +735,11 @@ export async function getAutomationAtCommit(automationId, commitHash, configPath
       return { success: false, automation: null, error: 'No YAML data' };
     }
 
-    // Helper to find by ID or Key/Index
-    const findAutomation = (collection, isArray) => {
-      if (isArray) {
-        const found = collection.find(item => item && item.id === identifier);
-        if (found) return found;
-        if (!isNaN(parseInt(identifier))) {
-          return collection[parseInt(identifier)];
-        }
-      } else {
-        const found = Object.values(collection).find(item => item && item.id === identifier);
-        if (found) return found;
-        return collection[identifier];
-      }
-      return null;
-    };
-
     let auto = null;
     if (data.automations) {
-      auto = findAutomation(data.automations, Array.isArray(data.automations));
+      auto = findItemByIdentifier(data.automations, identifier, Array.isArray(data.automations));
     } else {
-      auto = findAutomation(data, Array.isArray(data));
+      auto = findItemByIdentifier(data, identifier, Array.isArray(data));
     }
 
     return { success: !!auto, automation: auto };
@@ -729,11 +753,11 @@ export async function getAutomationAtCommit(automationId, commitHash, configPath
  * Get just the commit metadata for a script's file (fast, no YAML parsing)
  * @param {string} scriptId - The script ID
  * @param {string} configPath - The config path
+ * @param {Object} options - Optional parameters
  * @returns {Object} List of commit metadata
  */
-export async function getScriptHistoryMetadata(scriptId, configPath) {
-  const [, encodedPath, identifier] = scriptId.split(':');
-  const gitFilePath = decodeURIComponent(encodedPath).replace(/^\//, '');
+export async function getScriptHistoryMetadata(scriptId, configPath, options = {}) {
+  const { filePath: gitFilePath, identifier } = parseId(scriptId);
 
   try {
     const isRepo = await gitCheckIsRepo();
@@ -741,7 +765,11 @@ export async function getScriptHistoryMetadata(scriptId, configPath) {
       return { success: false, commits: [], error: 'Not a Git repository' };
     }
 
-    const log = await gitLog({ file: gitFilePath });
+    const logOptions = { file: gitFilePath };
+    if (options.maxCount) {
+      logOptions.maxCount = options.maxCount;
+    }
+    const log = await gitLog(logOptions);
 
     if (log.all.length === 0) {
       return { success: false, commits: [], error: 'No history found' };
@@ -774,8 +802,7 @@ export async function getScriptHistoryMetadata(scriptId, configPath) {
  * @returns {Object} The script content at that commit
  */
 export async function getScriptAtCommit(scriptId, commitHash, configPath) {
-  const [, encodedPath, identifier] = scriptId.split(':');
-  const gitFilePath = decodeURIComponent(encodedPath).replace(/^\//, '');
+  const { filePath: gitFilePath, identifier } = parseId(scriptId);
 
   try {
     const content = await gitShowFileAtCommit(commitHash, gitFilePath);
@@ -785,27 +812,11 @@ export async function getScriptAtCommit(scriptId, commitHash, configPath) {
       return { success: false, script: null, error: 'No YAML data' };
     }
 
-    // Helper to find by ID or Key/Index
-    const findScript = (collection, isArray) => {
-      if (isArray) {
-        const found = collection.find(item => item && item.id === identifier);
-        if (found) return found;
-        if (!isNaN(parseInt(identifier))) {
-          return collection[parseInt(identifier)];
-        }
-      } else {
-        const found = Object.values(collection).find(item => item && item.id === identifier);
-        if (found) return found;
-        return collection[identifier];
-      }
-      return null;
-    };
-
     let script = null;
     if (data.scripts) {
-      script = findScript(data.scripts, Array.isArray(data.scripts));
+      script = findItemByIdentifier(data.scripts, identifier, Array.isArray(data.scripts));
     } else {
-      script = findScript(data, Array.isArray(data));
+      script = findItemByIdentifier(data, identifier, Array.isArray(data));
     }
 
     return { success: !!script, script };
@@ -818,11 +829,12 @@ export async function getScriptAtCommit(scriptId, commitHash, configPath) {
 /**
  * Get the history of changes for a specific script
  * @param {string} scriptId - The script ID
+ * @param {string} configPath - The config path
+ * @param {Object} options - Optional parameters
  * @returns {Array} List of commits that affected this script
  */
-export async function getScriptHistory(scriptId, configPath) {
-  const [, encodedPath, identifier] = scriptId.split(':');
-  const gitFilePath = decodeURIComponent(encodedPath).replace(/^\//, '');
+export async function getScriptHistory(scriptId, configPath, options = {}) {
+  const { filePath: gitFilePath, identifier } = parseId(scriptId);
   const commits = [];
   const debugMessages = [];
 
@@ -845,7 +857,11 @@ export async function getScriptHistory(scriptId, configPath) {
       debugMessages.push(`[getScriptHistory] File ${gitFilePath} is not currently tracked (might be deleted). Continuing to check logs.`);
     }
 
-    const log = await gitLog({ file: gitFilePath });
+    const logOptions = { file: gitFilePath };
+    if (options.maxCount) {
+      logOptions.maxCount = options.maxCount;
+    }
+    const log = await gitLog(logOptions);
     debugMessages.push(`[getScriptHistory] Found ${log.all.length} commits for file ${gitFilePath}`);
 
     if (log.all.length === 0) {
@@ -864,39 +880,13 @@ export async function getScriptHistory(scriptId, configPath) {
 
         let script = null;
         if (data) {
-          // Helper to find by ID or Key/Index
-          const findScript = (collection, isArray) => {
-            if (isArray) {
-              // Try to find by UUID first
-              const found = collection.find(item => item && item.id === identifier);
-              if (found) return found;
-              // Fallback to index if identifier is numeric
-              if (!isNaN(parseInt(identifier))) {
-                return collection[parseInt(identifier)];
-              }
-            } else { // Object
-              // Try to find by UUID first (values)
-              const found = Object.values(collection).find(item => item && item.id === identifier);
-              if (found) return found;
-              // Fallback to key
-              return collection[identifier];
-            }
-            return null;
-          };
-
           if (data.scripts) {
-            if (Array.isArray(data.scripts)) {
-              script = findScript(data.scripts, true);
-            } else {
-              script = findScript(data.scripts, false);
-            }
+            script = findItemByIdentifier(data.scripts, identifier, Array.isArray(data.scripts));
+            debugMessages.push(`[getScriptHistory] Array/Object lookup for ${identifier}: ${!!script}`);
           } else {
-            // Standard format (root level)
-            if (Array.isArray(data)) { // Unlikely but possible for scripts? Generally scripts are objects or under 'script' 
-              script = findScript(data, true);
-            } else {
-              script = findScript(data, false);
-            }
+            // Standard Home Assistant format (root level array or object)
+            script = findItemByIdentifier(data, identifier, Array.isArray(data));
+            debugMessages.push(`[getScriptHistory] Root lookup for ${identifier}: ${!!script}`);
           }
         } else {
           debugMessages.push(`[getScriptHistory] No YAML data parsed from file at commit ${commit.hash.substring(0, 7)}`);
@@ -966,9 +956,7 @@ export async function getScriptHistory(scriptId, configPath) {
  * @returns {string} The diff
  */
 export async function getAutomationDiff(automationId, commitHash, configPath) {
-  const [, filePath, index] = automationId.split(':');
-  // Remove leading slash for git
-  const gitFilePath = filePath.replace(/^\//, '');
+  const { filePath: gitFilePath } = parseId(automationId);
   const prevHash = `${commitHash}^`;
 
   try {
@@ -990,9 +978,7 @@ export async function getAutomationDiff(automationId, commitHash, configPath) {
  * @returns {string} The diff
  */
 export async function getScriptDiff(scriptId, commitHash, configPath) {
-  const [, filePath] = scriptId.split(':');
-  // Remove leading slash for git
-  const gitFilePath = filePath.replace(/^\//, '');
+  const { filePath: gitFilePath } = parseId(scriptId);
   const prevHash = `${commitHash}^`;
 
   try {
@@ -1015,34 +1001,11 @@ async function getAutomationOrScriptFromContent(content, identifier, type) {
   let item = null;
   const key = type === 'automation' ? 'automations' : 'scripts';
 
-  const findItem = (collection, isArray) => {
-    if (isArray) {
-      const found = collection.find(item => item && item.id === identifier);
-      if (found) return found;
-      if (!isNaN(parseInt(identifier))) {
-        return collection[parseInt(identifier)];
-      }
-    } else {
-      const found = Object.values(collection).find(item => item && item.id === identifier);
-      if (found) return found;
-      return collection[identifier];
-    }
-    return null;
-  };
-
   if (data[key]) {
-    if (Array.isArray(data[key])) {
-      item = findItem(data[key], true);
-    } else {
-      item = findItem(data[key], false);
-    }
+    item = findItemByIdentifier(data[key], identifier, Array.isArray(data[key]));
   } else {
     // Root
-    if (Array.isArray(data)) {
-      item = findItem(data, true);
-    } else {
-      item = findItem(data, false);
-    }
+    item = findItemByIdentifier(data, identifier, Array.isArray(data));
   }
   return item;
 }
@@ -1055,9 +1018,8 @@ async function getAutomationOrScriptFromContent(content, identifier, type) {
  * @returns {boolean} Success status
  */
 export async function restoreAutomation(automationId, commitHash, configPath) {
-  const [, encodedPath, identifier] = automationId.split(':');
-  const gitFilePath = decodeURIComponent(encodedPath); // This is the relative path to the file
-  const fullPath = path.join(configPath, gitFilePath);
+  const { filePath: gitFilePath, identifier } = parseId(automationId);
+  const absFilePath = path.join(configPath, gitFilePath);
 
   try {
     // 1. Get the date from the commit for the commit message
@@ -1101,16 +1063,15 @@ export async function restoreAutomation(automationId, commitHash, configPath) {
     // 3. Get the current content of the file from disk (or create empty if new/deleted)
     let currentFileContent = '';
     try {
-      currentFileContent = await fs.promises.readFile(fullPath, 'utf-8');
+      currentFileContent = await fs.promises.readFile(absFilePath, 'utf-8');
     } catch (e) {
       // File might not exist (if it was deleted), we can try to recreate or error.
       // For simple restore of an item into an existing system, assuming file exists is safer unless we implement full file restore.
       // If file doesn't exist, we probably should create it with basic structure?
-      // Let's assume for now the file exists or user has to handle it. 
       // But if it's the "deleted items" flow, the file itself might be deleted? 
       // No, automations.yaml usually exists. If it's a split config file, it might be gone.
       // If file is missing, initialize as empty object/array depending on type?
-      log.debug(`[restoreAutomation] File ${fullPath} not found, initializing new`);
+      log.debug(`[restoreAutomation] File ${absFilePath} not found, initializing new`);
       currentFileContent = '';
     }
 
@@ -1179,8 +1140,8 @@ export async function restoreAutomation(automationId, commitHash, configPath) {
 
     // 6. Write the updated YAML back to the file
     // Ensure directory exists
-    await fs.promises.mkdir(path.dirname(fullPath), { recursive: true });
-    await fs.promises.writeFile(fullPath, updatedYaml);
+    await fs.promises.mkdir(path.dirname(absFilePath), { recursive: true });
+    await fs.promises.writeFile(absFilePath, updatedYaml);
     log.info(`[restoreAutomation] ✓ Automation '${identifier}' restored from ${commitDate}`);
 
     return true;
@@ -1198,9 +1159,8 @@ export async function restoreAutomation(automationId, commitHash, configPath) {
  * @returns {boolean} Success status
  */
 export async function restoreScript(scriptId, commitHash, configPath) {
-  const [, encodedPath, identifier] = scriptId.split(':');
-  const gitFilePath = decodeURIComponent(encodedPath); // This is the relative path to the file
-  const fullPath = path.join(configPath, gitFilePath);
+  const { filePath: gitFilePath, identifier } = parseId(scriptId);
+  const absFilePath = path.join(configPath, gitFilePath);
 
   try {
     // 1. Get the date from the commit for the commit message

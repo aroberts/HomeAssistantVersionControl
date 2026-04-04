@@ -1,6 +1,6 @@
 {
   "name": "Home Assistant Version Control",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "slug": "home-assistant-version-control",
   "description": "Git-powered version control and automated backup for your Home Assistant configuration files.",
   "url": "https://github.com/saihgupr/HomeAssistantVersionControl",
@@ -25,6 +25,8 @@
   },
   "map": [
     "config:rw",
+    "share:rw",
+    "media:rw",
     "ssl"
   ],
   "environment": {
@@ -37,7 +39,15 @@
     ],
     "exclude_files": [
       "secrets.yaml"
-    ]
+    ],
+    "include_storage": [
+      "lovelace",
+      "lovelace_dashboards",
+      "lovelace_resources",
+      "lovelace.*"
+    ],
+    "additional_paths": [],
+    "remote_url": ""
   },
   "schema": {
     "include_extensions": [
@@ -45,7 +55,14 @@
     ],
     "exclude_files": [
       "str"
-    ]
+    ],
+    "include_storage": [
+      "str"
+    ],
+    "additional_paths": [
+      "str"
+    ],
+    "remote_url": "str?"
   },
   "healthcheck": {
     "test": [
