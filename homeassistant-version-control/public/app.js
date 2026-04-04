@@ -2845,7 +2845,7 @@ async function displayCommits(commits) {
           : escapeHtml(displayText);
 
         // Apply toDisplayPath to strip .havc_external/ mirror prefix if present
-        fileName = toDisplayPath(fileName, { leadingSlash: true });
+        displayText = toDisplayPath(displayText, { leadingSlash: true });
 
         html += `
               <div class="commit" onclick="showCommit('${commit.hash}')" oncontextmenu="showTimelineContextMenu(event, '${commit.hash}')" id="commit-${commit.hash}">
