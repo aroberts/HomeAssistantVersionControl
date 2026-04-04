@@ -643,13 +643,13 @@ function sanitizeAdditionalPaths(paths) {
 
     const allowedPrefix = ALLOWED_ADDITIONAL_PATH_PREFIXES.find(prefix => isPathUnder(prefix, candidate));
     if (!allowedPrefix) {
-      console.log(`[external-sync] Skipping unsupported additional path: ${rawPath}`);
+      log.info(`[external-sync] Skipping unsupported additional path: ${rawPath}`);
       continue;
     }
 
     // /config is already tracked as the main repository root.
     if (CONFIG_PATH && isPathUnder(CONFIG_PATH, candidate)) {
-      console.log(`[external-sync] Skipping additional path already under CONFIG_PATH: ${candidate}`);
+      log.info(`[external-sync] Skipping additional path already under CONFIG_PATH: ${candidate}`);
       continue;
     }
 
@@ -734,7 +734,7 @@ async function walkFilesRecursive(dirPath, onFile) {
     entries = await fsPromises.readdir(dirPath, { withFileTypes: true });
   } catch (error) {
     if (error.code !== 'ENOENT') {
-      console.error(`[external-sync] Failed reading directory ${dirPath}:`, error.message);
+      log.error(`[external-sync] Failed reading directory ${dirPath}:`, error.message);
     }
     return;
   }
@@ -788,27 +788,27 @@ async function syncSingleAdditionalPathToMirror(additionalPath) {
   try {
     await fsPromises.access(additionalPath, fs.constants.R_OK);
   } catch (error) {
-    console.log(`[external-sync] Path not readable, skipping sync: ${additionalPath} (${error.code || 'ERROR'}: ${error.message})`);
+    log.info(`[external-sync] Path not readable, skipping sync: ${additionalPath} (${error.code || 'ERROR'}: ${error.message})`);
 
     // Help the user debug ENOENT for /media or /share paths
     if (error.code === 'ENOENT' && (additionalPath.startsWith('/media') || additionalPath.startsWith('/share'))) {
       const parentDir = path.dirname(additionalPath);
-      console.log(`[smart-diagnostics] ${additionalPath} is missing. Auditing environment...`);
+      log.debug(`[smart-diagnostics] ${additionalPath} is missing. Auditing environment...`);
       try {
         const rootDirs = await fsPromises.readdir('/');
-        console.log(`[smart-diagnostics] Root directories (/):`, rootDirs);
+        log.debug(`[smart-diagnostics] Root directories (/):`, rootDirs);
 
         for (const dir of ['/media', '/share', '/config']) {
           try {
             const contents = await fsPromises.readdir(dir);
-            console.log(`[smart-diagnostics] Contents of ${dir}:`, contents);
+            log.debug(`[smart-diagnostics] Contents of ${dir}:`, contents);
           } catch (e) {
-            console.log(`[smart-diagnostics] Could not read ${dir}:`, e.message);
+            log.debug(`[smart-diagnostics] Could not read ${dir}:`, e.message);
           }
         }
-        console.log(`[smart-diagnostics] Tip: If your files are on a Mac at '/Volumes/media-1', you must first mount that drive into Home Assistant's 'Media' folder in the HA System Settings.`);
+        log.debug(`[smart-diagnostics] Tip: If your files are on a Mac at '/Volumes/media-1', you must first mount that drive into Home Assistant's 'Media' folder in the HA System Settings.`);
       } catch (diagErr) {
-        console.log(`[smart-diagnostics] Audit failed:`, diagErr.message);
+        log.debug(`[smart-diagnostics] Audit failed:`, diagErr.message);
       }
     }
     return { copied: 0, removed: 0 };
@@ -836,14 +836,14 @@ async function syncSingleAdditionalPathToMirror(additionalPath) {
   });
 
   if (foundFiles.length > 0) {
-    console.log(`[external-sync] Found ${foundFiles.length} files in ${additionalPath}:`);
+    log.debug(`[external-sync] Found ${foundFiles.length} files in ${additionalPath}:`);
     for (const f of foundFiles) {
       const mirrorPath = externalAbsoluteToMirrorAbsolute(f);
       const repoPath = absolutePathToRepoPath(mirrorPath);
-      console.log(`[external-sync]   - ${f} -> ${repoPath}`);
+      log.debug(`[external-sync]   - ${f} -> ${repoPath}`);
     }
   } else {
-    console.log(`[external-sync] No trackable files found in ${additionalPath}`);
+    log.debug(`[external-sync] No trackable files found in ${additionalPath}`);
   }
 
   let removed = 0;
@@ -1271,7 +1271,7 @@ async function setupSshKeys() {
       return;
     }
 
-    console.log(`[ssh] Found SSH directory at ${sourceDir}, setting up system SSH...`);
+    log.info(`[ssh] Found SSH directory at ${sourceDir}, setting up system SSH...`);
 
     // Ensure destination directory exists
     try {
@@ -1296,7 +1296,7 @@ async function setupSshKeys() {
 
       // Set permissions: 600 for keys (SSH is strict about this)
       await fsPromises.chmod(destPath, 0o600);
-      console.log(`[ssh] Copied and secured: ${file}`);
+      log.debug(`[ssh] Copied and secured: ${file}`);
     }
 
     // Default SSH config if none exists in source
@@ -1320,12 +1320,12 @@ Host bitbucket.org
   UserKnownHostsFile /dev/null
 `;
       await fsPromises.writeFile(destConfigFile, defaultSSHConfig, { mode: 0o600 });
-      console.log('[ssh] Created default SSH config with StrictHostKeyChecking disabled for common hosts');
+      log.info('[ssh] Created default SSH config with StrictHostKeyChecking disabled for common hosts');
     }
 
-    console.log('[ssh] SSH setup complete');
+    log.info('[ssh] SSH setup complete');
   } catch (error) {
-    console.error('[ssh] Setup failed:', error.message);
+    log.error('[ssh] Setup failed:', error.message);
   }
 }
 
@@ -1346,7 +1346,7 @@ async function setupCaCertificates() {
       return;
     }
 
-    console.log(`[init] Found additional CA directory at ${sourceDir}, setting up system certificates...`);
+    log.info(`[init] Found additional CA directory at ${sourceDir}, setting up system certificates...`);
 
     // Ensure destination directory exists (usually it does in alpine)
     try {
@@ -1366,25 +1366,25 @@ async function setupCaCertificates() {
 
         // Copy file
         await fsPromises.copyFile(srcPath, destPath);
-        console.log(`[init] Copied CA certificate: ${file}`);
+        log.debug(`[init] Copied CA certificate: ${file}`);
         copiedCount++;
       }
     }
 
     if (copiedCount > 0) {
-      console.log(`[init] Updating system CA trust store...`);
+      log.info(`[init] Updating system CA trust store...`);
       try {
         execSync('update-ca-certificates', { stdio: 'pipe' });
-        console.log('[init] CA certificates updated successfully');
+        log.info('[init] CA certificates updated successfully');
       } catch (updateError) {
-        console.error('[init] Failed to update CA certificates:', updateError.message);
+        log.error('[init] Failed to update CA certificates:', updateError.message);
       }
     } else {
-      console.log('[init] No .crt files found in additional_ca directory');
+      log.debug('[init] No .crt files found in additional_ca directory');
     }
 
   } catch (error) {
-    console.error('[init] CA certificate setup failed:', error.message);
+    log.error('[init] CA certificate setup failed:', error.message);
   }
 }
 
@@ -1463,7 +1463,7 @@ async function initRepo() {
     configOptions.txt_format = include.includes('txt');
     configOptions.yaml_format = include.includes('yaml') || include.includes('yml');
 
-    console.log(`[init] Synchronized file format options:`, configOptions);
+    log.debug(`[init] Synchronized file format options:`, configOptions);
 
     // Default to /config
     if (!CONFIG_PATH) {
@@ -1496,7 +1496,7 @@ async function initRepo() {
 
     const externalSyncStats = await syncAllAdditionalPathsToMirror();
     if (externalSyncStats.paths > 0) {
-      console.log(`[external-sync] Startup sync complete: paths=${externalSyncStats.paths}, copied=${externalSyncStats.copied}, removed=${externalSyncStats.removed}`);
+      log.info(`[external-sync] Startup sync complete: paths=${externalSyncStats.paths}, copied=${externalSyncStats.copied}, removed=${externalSyncStats.removed}`);
     }
 
     const isRepo = await gitCheckIsRepo();
@@ -1661,13 +1661,13 @@ async function initRepo() {
 
     // Apply pending remote update from config
     if (global.pendingRemoteUpdate && runtimeSettings.cloudSync.remoteUrl) {
-      console.log(`[init] Applying pending remote URL update: ${runtimeSettings.cloudSync.remoteUrl}`);
+      log.info(`[init] Applying pending remote URL update: ${runtimeSettings.cloudSync.remoteUrl}`);
       const remoteResult = await setupGitRemote(runtimeSettings.cloudSync.remoteUrl, runtimeSettings.cloudSync.authToken);
       if (remoteResult.success) {
-        console.log('[init] Successfully updated git remote from config');
+        log.info('[init] Successfully updated git remote from config');
         await saveRuntimeSettings();
       } else {
-        console.error('[init] Failed to update git remote from config:', remoteResult.error);
+        log.error('[init] Failed to update git remote from config:', remoteResult.error);
       }
       global.pendingRemoteUpdate = false;
     }
@@ -1777,7 +1777,7 @@ app.post('/api/runtime-settings', async (req, res) => {
       configOptions.py_format = include.includes('py');
       configOptions.txt_format = include.includes('txt');
       configOptions.yaml_format = include.includes('yaml') || include.includes('yml');
-      console.log(`[settings] Updated file format options:`, configOptions);
+      log.debug(`[settings] Updated file format options:`, configOptions);
 
       const newExclude = runtimeSettings.extensions.exclude || [];
       const newlyExcluded = newExclude.filter(file => !oldExclude.includes(file));
@@ -3017,7 +3017,7 @@ async function handleExternalWatcherEvent(filePath, eventType) {
     if (eventType === 'deleted') {
       const removedPath = await removeMirrorFileForExternalPath(normalized);
       if (removedPath) {
-        console.log(`[external-sync] Removed mirror for deleted file: ${normalized}`);
+        log.debug(`[external-sync] Removed mirror for deleted file: ${normalized}`);
       }
       return;
     }
@@ -3029,11 +3029,11 @@ async function handleExternalWatcherEvent(filePath, eventType) {
 
     const mirroredPath = await syncExternalFileToMirror(normalized);
     if (mirroredPath) {
-      console.log(`[external-sync] Synced ${eventType} file: ${normalized} -> ${mirroredPath}`);
+      log.debug(`[external-sync] Synced ${eventType} file: ${normalized} -> ${mirroredPath}`);
     }
   } catch (error) {
     if (error.code !== 'ENOENT') {
-      console.error(`[external-sync] Failed to process ${eventType} event for ${normalized}:`, error.message);
+      log.error(`[external-sync] Failed to process ${eventType} event for ${normalized}:`, error.message);
     }
   }
 }
@@ -3056,11 +3056,11 @@ async function initializeExternalWatchers() {
     try {
       await fsPromises.access(additionalPath, fs.constants.R_OK);
     } catch (error) {
-      console.log(`[external-sync] Additional path not accessible, skipping watcher: ${additionalPath} (${error.code || 'ERROR'}: ${error.message})`);
+      log.info(`[external-sync] Additional path not accessible, skipping watcher: ${additionalPath} (${error.code || 'ERROR'}: ${error.message})`);
       continue;
     }
 
-    console.log(`[external-sync] Watching additional path: ${additionalPath}/**/*`);
+    log.info(`[external-sync] Watching additional path: ${additionalPath}/**/*`);
     const externalWatcher = chokidar.watch(`${additionalPath}/**/*`, {
       persistent: true,
       ignoreInitial: true,
@@ -3079,8 +3079,8 @@ async function initializeExternalWatchers() {
     externalWatcher.on('add', (filePath) => handleExternalWatcherEvent(filePath, 'added'));
     externalWatcher.on('change', (filePath) => handleExternalWatcherEvent(filePath, 'changed'));
     externalWatcher.on('unlink', (filePath) => handleExternalWatcherEvent(filePath, 'deleted'));
-    externalWatcher.on('ready', () => console.log(`[external-sync] Watcher ready: ${additionalPath}`));
-    externalWatcher.on('error', (error) => console.error(`[external-sync] Watcher error (${additionalPath}):`, error));
+    externalWatcher.on('ready', () => log.info(`[external-sync] Watcher ready: ${additionalPath}`));
+    externalWatcher.on('error', (error) => log.error(`[external-sync] Watcher error (${additionalPath}):`, error));
 
     externalWatchers.push(externalWatcher);
   }
@@ -3834,7 +3834,7 @@ const server = app.listen(PORT, HOST, (err) => {
     .then(() => {
       initializeWatcher();
       initializeExternalWatchers().catch((error) => {
-        console.error('[external-sync] Failed to initialize external watchers:', error);
+        log.error('[external-sync] Failed to initialize external watchers:', error);
       });
 
       // Start cloud sync scheduler (check every hour)

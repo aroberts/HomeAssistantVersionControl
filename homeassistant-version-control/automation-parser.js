@@ -121,7 +121,7 @@ function parseId(fullId) {
     encodedPath: parts[1] || '', 
     identifier: decodeURIComponent(parts.slice(2).join(':')) 
   };
-  console.log(`[parseId] type=${type}, identifier=${identifier}, filePath=${filePath}`);
+  log.debug(`[parseId] type=${type}, identifier=${identifier}, filePath=${filePath}`);
   return { type, filePath, encodedPath, identifier };
 }
 
@@ -133,26 +133,26 @@ function findItemByIdentifier(collection, identifier, isArray) {
     // 1. Try to find by UUID (stringified to handle numeric IDs parsed as numbers by js-yaml)
     let found = collection.find(item => item && String(item.id) === String(identifier));
     if (found) {
-      console.log(`[findItemByIdentifier] Found by ID: "${identifier}"`);
+      log.debug(`[findItemByIdentifier] Found by ID: "${identifier}"`);
       return found;
     }
     // 2. Try to find by alias (fallback identifier) - Case-insensitive
     found = collection.find(item => item && item.alias && String(item.alias).toLowerCase() === String(identifier).toLowerCase());
     if (found) {
-      console.log(`[findItemByIdentifier] Found by Alias: "${identifier}"`);
+      log.debug(`[findItemByIdentifier] Found by Alias: "${identifier}"`);
       return found;
     }
     // 3. Fallback to index ONLY if identifier is purely numeric
     if (/^\d+$/.test(String(identifier))) {
       const idx = parseInt(identifier);
       if (idx >= 0 && idx < collection.length) {
-        console.log(`[findItemByIdentifier] Falling back to Index: ${idx} for identifier: "${identifier}"`);
+        log.debug(`[findItemByIdentifier] Falling back to Index: ${idx} for identifier: "${identifier}"`);
         return collection[idx];
       }
     }
     
     // Debug output to help understand failures
-    console.log(`[findItemByIdentifier] NOT FOUND for identifier: "${identifier}". Available aliases: ${collection.slice(0, 5).map(i => i?.alias).join(', ')}...`);
+    log.debug(`[findItemByIdentifier] NOT FOUND for identifier: "${identifier}". Available aliases: ${collection.slice(0, 5).map(i => i?.alias).join(', ')}...`);
   } else { // Object
     const values = Object.values(collection);
     // 1. Try to find by UUID (values)
