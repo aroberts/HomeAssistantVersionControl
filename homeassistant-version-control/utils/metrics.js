@@ -143,7 +143,7 @@ export const lastPushTimestamp = registerMetric(
 
 // Pull metrics
 export const pullTotal = registerMetric(
-  new Counter('havc_cloud_sync_pull_total', 'Total cloud sync pulls', ['status', 'reason'])
+  new Counter('havc_cloud_sync_pull_total', 'Total cloud sync pulls', ['status', 'reason', 'stage'])
 );
 export const pullDuration = registerMetric(
   new Histogram('havc_cloud_sync_pull_duration_seconds', 'Pull duration in seconds', [1, 5, 15, 30, 60, 120])

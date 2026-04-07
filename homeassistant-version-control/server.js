@@ -295,6 +295,121 @@ async function callHomeAssistantService(domain, service, serviceData = {}) {
   }
 }
 
+/**
+ * General-purpose Home Assistant REST API caller.
+ * Unlike callHomeAssistantService (which targets /api/services/), this can call
+ * any HA REST endpoint (e.g. /api/config/core/check_config).
+ *
+ * @param {string} method - HTTP method (GET, POST, etc.)
+ * @param {string} apiPath - Path relative to HA root, e.g. 'api/config/core/check_config'
+ * @param {Object} [body] - Optional JSON body
+ * @returns {{ success: boolean, data?: any, error?: string, tokenMissing?: boolean }}
+ */
+async function callHomeAssistantApi(method, apiPath, body) {
+  try {
+    let supervisorToken = process.env.SUPERVISOR_TOKEN || process.env.HASSIO_TOKEN;
+
+    if (!supervisorToken) {
+      for (const name of ['SUPERVISOR_TOKEN', 'HASSIO_TOKEN']) {
+        try {
+          supervisorToken = fs.readFileSync(`/var/run/s6/container_environment/${name}`, 'utf-8').trim();
+          if (supervisorToken) break;
+        } catch {
+          // s6 env file doesn't exist
+        }
+      }
+    }
+
+    if (!supervisorToken) {
+      log.debug('[HA API] SUPERVISOR_TOKEN not available, skipping API call');
+      return { success: false, error: 'SUPERVISOR_TOKEN not available', tokenMissing: true };
+    }
+
+    const haUrl = process.env.HA_URL;
+    let url;
+    if (haUrl) {
+      const baseUrl = haUrl.replace(/\/$/, '');
+      url = `${baseUrl}/${apiPath}`;
+    } else {
+      url = `http://supervisor/core/${apiPath}`;
+    }
+
+    log.debug(`[HA API] ${method} ${apiPath}`);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    try {
+      const fetchOpts = {
+        method,
+        headers: {
+          'Authorization': `Bearer ${supervisorToken}`,
+          'Content-Type': 'application/json'
+        },
+        signal: controller.signal
+      };
+      if (body !== undefined) {
+        fetchOpts.body = JSON.stringify(body);
+      }
+
+      const response = await fetch(url, fetchOpts);
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        const data = await response.json().catch(() => null);
+        return { success: true, data };
+      } else {
+        const errorText = await response.text();
+        log.error(`[HA API] ${apiPath} failed: ${response.status} ${errorText}`);
+        return { success: false, error: `HTTP ${response.status}: ${errorText}` };
+      }
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      if (fetchError.name === 'AbortError') {
+        log.error(`[HA API] Request timeout after 5 seconds`);
+        return { success: false, error: 'Request timeout - check HA_URL is correct and Home Assistant is reachable' };
+      }
+      throw fetchError;
+    }
+  } catch (error) {
+    log.error(`[HA API] Error calling ${apiPath}:`, error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Check Home Assistant configuration validity.
+ * Calls POST /api/config/core/check_config.
+ * @returns {{ success: boolean, result?: string, errors?: string, error?: string, tokenMissing?: boolean }}
+ */
+async function checkHomeAssistantConfig() {
+  const apiResult = await callHomeAssistantApi('POST', 'api/config/core/check_config');
+  if (apiResult.tokenMissing) {
+    return { success: false, error: apiResult.error, tokenMissing: true };
+  }
+  if (!apiResult.success) {
+    return { success: false, error: apiResult.error };
+  }
+  const data = apiResult.data || {};
+  if (data.result === 'valid') {
+    return { success: true, result: 'valid' };
+  }
+  return { success: false, result: 'invalid', errors: data.errors || 'Unknown validation error' };
+}
+
+/**
+ * Reload all Home Assistant YAML configuration.
+ * Calls homeassistant.reload_all service.
+ * @returns {{ success: boolean, error?: string, tokenMissing?: boolean }}
+ */
+async function reloadHomeAssistantConfig() {
+  const result = await callHomeAssistantService('homeassistant', 'reload_all');
+  if (!result.success && result.error === 'SUPERVISOR_TOKEN not available') {
+    return { success: false, error: result.error, tokenMissing: true };
+  }
+  return result;
+}
+
 // Restart Home Assistant endpoint
 app.post('/api/ha/restart', async (req, res) => {
   try {
@@ -4242,7 +4357,7 @@ async function pushToRemote(includeSecrets = false) {
     // Pull before push if configured
     if (runtimeSettings.cloudSync.pullBeforePush) {
       log.debug('[cloud-sync] Pull before push enabled, pulling...');
-      const pullResult = await pullFromRemote(runtimeSettings.cloudSync.pullRebase);
+      const pullResult = await gitPull(runtimeSettings.cloudSync.pullRebase);
       if (!pullResult.success) {
         throw new Error(`Pre-push pull failed: ${pullResult.error}`);
       }
@@ -4307,101 +4422,200 @@ async function pushToRemote(includeSecrets = false) {
 }
 
 /**
- * Pull changes from remote repository
+ * Git-only pull operation. No metrics, no settings persistence.
+ * Used by both the pull pipeline and pullBeforePush.
  * @param {boolean} rebase - Use --rebase (true) or normal merge (false)
- * @returns {Object} Result with success status
+ * @returns {{ success: boolean, changes?: boolean, behind?: number, error?: string, reason?: string }}
  */
-async function pullFromRemote(rebase = true) {
-  const startTime = Date.now();
+async function gitPull(rebase = true) {
+  const configuredBranch = runtimeSettings.cloudSync.branch || 'develop';
+  let localBranch = configuredBranch;
   try {
-    // Get current local branch
-    const configuredBranch = runtimeSettings.cloudSync.branch || 'develop';
-    let localBranch = configuredBranch;
-    try {
-      const branchResult = await gitRevparse(['--abbrev-ref', 'HEAD']);
-      localBranch = branchResult.trim() || configuredBranch;
-    } catch (e) {
-      log.debug(`[cloud-sync] Could not determine branch, using ${configuredBranch}`);
-    }
+    const branchResult = await gitRevparse(['--abbrev-ref', 'HEAD']);
+    localBranch = branchResult.trim() || configuredBranch;
+  } catch (e) {
+    log.debug(`[cloud-sync] Could not determine branch, using ${configuredBranch}`);
+  }
 
-    const remoteBranch = configuredBranch;
-    const strategy = rebase ? 'rebase' : 'merge';
-    log.info(`[cloud-sync] Pull started (origin/${remoteBranch} -> ${localBranch}, strategy: ${strategy})`);
+  const remoteBranch = configuredBranch;
+  const strategy = rebase ? 'rebase' : 'merge';
+  log.info(`[cloud-sync] Pull started (origin/${remoteBranch} -> ${localBranch}, strategy: ${strategy})`);
 
-    // Fetch first so we can check if there are changes
-    await gitExec(['fetch', 'origin', remoteBranch]);
+  // Fetch first so we can check if there are changes
+  await gitExec(['fetch', 'origin', remoteBranch]);
 
-    // Check if there are incoming changes
-    let behindCount = 0;
-    try {
-      const countOutput = await gitRaw(['rev-list', '--count', `HEAD..origin/${remoteBranch}`]);
-      behindCount = parseInt(countOutput.trim()) || 0;
-    } catch (e) {
-      // Remote branch may not exist yet
-      log.debug('[cloud-sync] Could not determine behind count, proceeding with pull');
-    }
+  // Check if there are incoming changes
+  let behindCount = 0;
+  try {
+    const countOutput = await gitRaw(['rev-list', '--count', `HEAD..origin/${remoteBranch}`]);
+    behindCount = parseInt(countOutput.trim()) || 0;
+  } catch (e) {
+    log.debug('[cloud-sync] Could not determine behind count, proceeding with pull');
+  }
 
-    if (behindCount === 0) {
-      const durationSec = (Date.now() - startTime) / 1000;
-      log.info(`[cloud-sync] Pull: already up to date (${durationSec.toFixed(1)}s)`);
-      pullTotal.inc({ status: 'success', reason: 'up_to_date' });
-      pullDuration.observe(durationSec);
-      lastPullTimestamp.set(Math.floor(Date.now() / 1000));
+  if (behindCount === 0) {
+    return { success: true, changes: false, behind: 0 };
+  }
 
-      runtimeSettings.cloudSync.lastPullTime = new Date().toISOString();
-      runtimeSettings.cloudSync.lastPullStatus = 'success';
-      runtimeSettings.cloudSync.lastPullError = null;
-      await saveRuntimeSettings();
-
-      return { success: true, changes: false, behind: 0 };
-    }
-
-    // Pull with chosen strategy
+  try {
     const pullArgs = rebase
       ? ['pull', '--rebase', 'origin', remoteBranch]
       : ['pull', 'origin', remoteBranch];
     await gitExec(pullArgs);
-
-    const durationSec = (Date.now() - startTime) / 1000;
-    log.info(`[cloud-sync] Pull succeeded: ${behindCount} commit(s) in ${durationSec.toFixed(1)}s`);
-
-    // Metrics
-    pullTotal.inc({ status: 'success', reason: 'ok' });
-    pullDuration.observe(durationSec);
-    lastPullTimestamp.set(Math.floor(Date.now() / 1000));
-
-    // Persist status
-    runtimeSettings.cloudSync.lastPullTime = new Date().toISOString();
-    runtimeSettings.cloudSync.lastPullStatus = 'success';
-    runtimeSettings.cloudSync.lastPullError = null;
-    await saveRuntimeSettings();
-
     return { success: true, changes: true, behind: behindCount };
-
   } catch (error) {
-    const durationSec = (Date.now() - startTime) / 1000;
-    const reason = classifyPullError(error.message);
-    log.error(`[cloud-sync] Pull failed: ${reason} - ${error.message}`);
-
     // Abort rebase/merge if stuck
     if (rebase) {
       try { await gitExec(['rebase', '--abort']); } catch (e) { /* no rebase in progress */ }
     } else {
       try { await gitExec(['merge', '--abort']); } catch (e) { /* no merge in progress */ }
     }
-
-    // Metrics
-    pullTotal.inc({ status: 'failure', reason });
-    pullDuration.observe(durationSec);
-
-    // Persist status
-    runtimeSettings.cloudSync.lastPullTime = new Date().toISOString();
-    runtimeSettings.cloudSync.lastPullStatus = 'error';
-    runtimeSettings.cloudSync.lastPullError = error.message;
-    await saveRuntimeSettings();
-
+    const reason = classifyPullError(error.message);
     return { success: false, error: error.message, reason };
   }
+}
+
+/**
+ * Pull pipeline: git pull → validate config → reload config.
+ *
+ * Each stage is monitored. Failure at any stage aborts the pipeline.
+ * If no changes were pulled, validate and reload are skipped.
+ * If the HA API is not configured (no token), validate and reload stages
+ * fail the pipeline — except when the token is entirely missing (not configured),
+ * in which case those stages are skipped with a warning.
+ *
+ * @param {boolean} rebase - Use --rebase (true) or normal merge (false)
+ * @returns {Object} Pipeline result with per-stage details
+ */
+async function pullFromRemote(rebase = true) {
+  const startTime = Date.now();
+  const pipeline = {};
+
+  // ── Stage 1: Git Pull ──────────────────────────────────
+  log.info('[cloud-sync] Pipeline stage 1/3: git pull');
+  const pullResult = await gitPull(rebase);
+  const pullDurationSec = (Date.now() - startTime) / 1000;
+
+  if (!pullResult.success) {
+    log.error(`[cloud-sync] Pipeline failed at stage git_pull: ${pullResult.reason} - ${pullResult.error}`);
+    pipeline.pull = { success: false, error: pullResult.error };
+
+    pullTotal.inc({ status: 'failure', reason: pullResult.reason, stage: 'git_pull' });
+    pullDuration.observe(pullDurationSec);
+
+    runtimeSettings.cloudSync.lastPullTime = new Date().toISOString();
+    runtimeSettings.cloudSync.lastPullStatus = 'error';
+    runtimeSettings.cloudSync.lastPullError = `[git_pull] ${pullResult.error}`;
+    await saveRuntimeSettings();
+
+    return { success: false, failedStage: 'git_pull', error: pullResult.error, reason: pullResult.reason, pipeline };
+  }
+
+  pipeline.pull = { success: true, changes: pullResult.changes, behind: pullResult.behind };
+
+  // No changes — skip validate and reload
+  if (!pullResult.changes) {
+    const durationSec = (Date.now() - startTime) / 1000;
+    log.info(`[cloud-sync] Pull: already up to date (${durationSec.toFixed(1)}s)`);
+
+    pullTotal.inc({ status: 'success', reason: 'up_to_date', stage: 'complete' });
+    pullDuration.observe(durationSec);
+    lastPullTimestamp.set(Math.floor(Date.now() / 1000));
+
+    runtimeSettings.cloudSync.lastPullTime = new Date().toISOString();
+    runtimeSettings.cloudSync.lastPullStatus = 'success';
+    runtimeSettings.cloudSync.lastPullError = null;
+    await saveRuntimeSettings();
+
+    return { success: true, changes: false, behind: 0, pipeline };
+  }
+
+  log.info(`[cloud-sync] Git pull succeeded: ${pullResult.behind} commit(s)`);
+
+  // ── Stage 2: Validate Config ───────────────────────────
+  log.info('[cloud-sync] Pipeline stage 2/3: validate config');
+  const validateResult = await checkHomeAssistantConfig();
+
+  if (validateResult.tokenMissing) {
+    log.warn('[cloud-sync] HA API not configured — skipping validate and reload stages');
+    pipeline.validate = { success: true, skipped: true, reason: 'HA API not configured' };
+    pipeline.reload = { success: true, skipped: true, reason: 'HA API not configured' };
+
+    const durationSec = (Date.now() - startTime) / 1000;
+    pullTotal.inc({ status: 'success', reason: 'ok', stage: 'complete' });
+    pullDuration.observe(durationSec);
+    lastPullTimestamp.set(Math.floor(Date.now() / 1000));
+
+    runtimeSettings.cloudSync.lastPullTime = new Date().toISOString();
+    runtimeSettings.cloudSync.lastPullStatus = 'success';
+    runtimeSettings.cloudSync.lastPullError = null;
+    await saveRuntimeSettings();
+
+    return {
+      success: true, changes: true, behind: pullResult.behind,
+      skippedStages: ['validate', 'reload'], pipeline
+    };
+  }
+
+  if (!validateResult.success) {
+    const reason = validateResult.result === 'invalid' ? 'invalid_config' : 'api_unavailable';
+    const errorMsg = validateResult.errors || validateResult.error;
+    log.error(`[cloud-sync] Pipeline failed at stage validate: ${reason} - ${errorMsg}`);
+    pipeline.validate = { success: false, error: errorMsg, result: validateResult.result };
+
+    const durationSec = (Date.now() - startTime) / 1000;
+    pullTotal.inc({ status: 'failure', reason, stage: 'validate' });
+    pullDuration.observe(durationSec);
+
+    runtimeSettings.cloudSync.lastPullTime = new Date().toISOString();
+    runtimeSettings.cloudSync.lastPullStatus = 'error';
+    runtimeSettings.cloudSync.lastPullError = `[validate] ${errorMsg}`;
+    await saveRuntimeSettings();
+
+    return { success: false, failedStage: 'validate', error: errorMsg, reason, pipeline };
+  }
+
+  pipeline.validate = { success: true, result: 'valid' };
+  log.info('[cloud-sync] Config validation passed');
+
+  // ── Stage 3: Reload Config ─────────────────────────────
+  log.info('[cloud-sync] Pipeline stage 3/3: reload config');
+  const reloadResult = await reloadHomeAssistantConfig();
+
+  if (!reloadResult.success) {
+    const reason = 'reload_failed';
+    log.error(`[cloud-sync] Pipeline failed at stage reload: ${reloadResult.error}`);
+    pipeline.reload = { success: false, error: reloadResult.error };
+
+    const durationSec = (Date.now() - startTime) / 1000;
+    pullTotal.inc({ status: 'failure', reason, stage: 'reload' });
+    pullDuration.observe(durationSec);
+
+    runtimeSettings.cloudSync.lastPullTime = new Date().toISOString();
+    runtimeSettings.cloudSync.lastPullStatus = 'error';
+    runtimeSettings.cloudSync.lastPullError = `[reload] ${reloadResult.error}`;
+    await saveRuntimeSettings();
+
+    return { success: false, failedStage: 'reload', error: reloadResult.error, reason, pipeline };
+  }
+
+  pipeline.reload = { success: true };
+  log.info('[cloud-sync] Config reload succeeded');
+
+  // ── All stages passed ──────────────────────────────────
+  const durationSec = (Date.now() - startTime) / 1000;
+  log.info(`[cloud-sync] Pull pipeline complete: ${pullResult.behind} commit(s) in ${durationSec.toFixed(1)}s`);
+
+  pullTotal.inc({ status: 'success', reason: 'ok', stage: 'complete' });
+  pullDuration.observe(durationSec);
+  lastPullTimestamp.set(Math.floor(Date.now() / 1000));
+
+  runtimeSettings.cloudSync.lastPullTime = new Date().toISOString();
+  runtimeSettings.cloudSync.lastPullStatus = 'success';
+  runtimeSettings.cloudSync.lastPullError = null;
+  await saveRuntimeSettings();
+
+  return { success: true, changes: true, behind: pullResult.behind, pipeline };
 }
 
 /**
