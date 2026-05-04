@@ -85,7 +85,7 @@
     "org.opencontainers.image.source": "https://github.com/saihgupr/HomeAssistantVersionControl",
     "org.opencontainers.image.licenses": "MIT"
   },
-  "supported": false,
+  "supported": true,
   "ingress": true,
   "panel_icon": "mdi:auto-fix",
   "panel_title": "Version Control"
