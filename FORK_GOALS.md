@@ -14,7 +14,7 @@ This document describes what this fork changes relative to [upstream](https://gi
 - Environment variables: `AI_GENERATE_COMMIT_MESSAGES`, `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY`, `AI_PROMPT`
 - All AI env vars support Docker secrets via `_FILE` suffix
 - Frontend: `classifyCommitMessage()` distinguishes AI descriptions from filename messages; AI messages render italic with body shown on hover
-- Test tooling: `test-bench-ai-commit.js` benchmarks all installed Ollama models against 7 sample HA config diffs
+- Test tooling: `tests/test-bench-ai-commit.js` benchmarks all installed Ollama models against 7 sample HA config diffs
 
 **Commits:** `6141f34`, `d92114b`, `9621b03`, `de34623`, `94e5910`, `e996a49`
 

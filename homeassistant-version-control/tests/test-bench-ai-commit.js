@@ -5,9 +5,9 @@
  * and multiple diff inputs, outputting a matrix of results.
  *
  * Usage:
- *   node test-bench-ai-commit.js                                # all models, all diffs in ./test/diffs/
- *   node test-bench-ai-commit.js --filter 'llama|gemma'         # subset of models
- *   node test-bench-ai-commit.js --diffs ./test/diffs/01*.diff  # specific diff files
+ *   node tests/test-bench-ai-commit.js                                # all models, all diffs in ./tests/diffs/
+ *   node tests/test-bench-ai-commit.js --filter 'llama|gemma'         # subset of models
+ *   node tests/test-bench-ai-commit.js --diffs ./tests/diffs/01*.diff # specific diff files
  *   OLLAMA_HOST=http://10.0.0.5:11434 node test-bench-ai-commit.js
  */
 
@@ -16,7 +16,7 @@ import { resolve, basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_DIFFS_DIR = resolve(__dirname, 'test/diffs');
+const DEFAULT_DIFFS_DIR = resolve(__dirname, 'diffs');
 const OLLAMA_HOST = (process.env.OLLAMA_HOST || 'http://localhost:11434').replace(/\/+$/, '');
 const COMPLETIONS_URL = `${OLLAMA_HOST}/v1/chat/completions`;
 const MODELS_URL = `${OLLAMA_HOST}/api/tags`;

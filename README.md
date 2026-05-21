@@ -531,7 +531,7 @@ The script sends a sample diff, dumps the full raw API response, and diagnoses c
 
 ```bash
 cd homeassistant-version-control
-OLLAMA_HOST=http://localhost:11434 node test-bench-ai-commit.js
+OLLAMA_HOST=http://localhost:11434 node tests/test-bench-ai-commit.js
 ```
 
 This runs every model against 7 representative HA config diffs and outputs a timing matrix, message comparison, and success rate summary. Use `--filter 'llama|gemma'` to test a subset of models.
