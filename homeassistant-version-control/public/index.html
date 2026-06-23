@@ -422,6 +422,21 @@
                 <div class="segmented-control-slider"></div>
               </div>
             </div>
+
+            <div class="setting-item"
+              style="margin-bottom: 0; display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <span style="color: var(--text-primary); font-size: 14px;">Legacy Arrow Direction</span>
+                <p style="color: var(--text-secondary); font-size: 12px; margin-top: 4px; margin-bottom: 0;">
+                  Restore original ◀ = newer, ▶ = older (default: ◀ = older)
+                </p>
+              </div>
+              <div class="toggle-switch">
+                <input type="checkbox" id="reverseArrowDirection" style="display: none;"
+                  onchange="toggleReverseArrowDirection(this.checked)">
+                <label for="reverseArrowDirection" class="toggle-slider"></label>
+              </div>
+            </div>
           </div>
 
           <!-- Group: Cloud Backup -->
