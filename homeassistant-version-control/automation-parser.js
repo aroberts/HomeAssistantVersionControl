@@ -1176,14 +1176,16 @@ export async function restoreScript(scriptId, commitHash, configPath) {
       return false;
     }
 
-    // 3. Get the current content of the file from disk
-    const currentFileContent = await fs.promises.readFile(fullPath, 'utf-8');
-    let currentData = yaml.load(currentFileContent);
-
-    if (!currentData) {
-      log.error(`[restoreScript] Could not parse current YAML content for file ${gitFilePath}`);
-      return false;
+    // 3. Get the current content of the file from disk (or initialize empty if missing)
+    let currentFileContent = '';
+    try {
+      currentFileContent = await fs.promises.readFile(absFilePath, 'utf-8');
+    } catch (e) {
+      log.debug(`[restoreScript] File ${absFilePath} not found, initializing new`);
+      currentFileContent = '';
     }
+
+    let currentData = yaml.load(currentFileContent) || {};
 
     // 4. Locate and add/replace the specific script in the current data structure
     const key = 'scripts'; // Assuming scripts are under 'scripts' key or root
@@ -1217,7 +1219,8 @@ export async function restoreScript(scriptId, commitHash, configPath) {
     });
 
     // 6. Write the updated YAML back to the file
-    await fs.promises.writeFile(fullPath, updatedYaml);
+    await fs.promises.mkdir(path.dirname(absFilePath), { recursive: true });
+    await fs.promises.writeFile(absFilePath, updatedYaml);
     log.info(`[restoreScript] ✓ Script '${identifier}' restored from ${commitDate}`);
     log.debug(`[restoreScript] ✓ File watcher will auto-commit this change`);
 
