@@ -1215,6 +1215,16 @@ async function saveRuntimeSettings() {
 }
 
 /**
+ * Mask embedded credentials in URLs for safe logging
+ * @param {string} url - Raw URL potentially containing tokens/passwords
+ * @returns {string} Masked URL with credentials replaced by ***
+ */
+function maskUrl(url) {
+  if (!url || typeof url !== 'string') return '';
+  return url.replace(/:\/\/([^/]+)@/, '://***@');
+}
+
+/**
  * Redact sensitive fields from settings for API responses
  */
 function redactSettings(settings) {
@@ -1227,7 +1237,7 @@ function redactSettings(settings) {
     // Mask embedded credentials in URLs (https://token@host/...)
     for (const key of ['remoteUrl', 'githubRemoteUrl', 'customRemoteUrl']) {
       if (redacted.cloudSync[key]) {
-        redacted.cloudSync[key] = redacted.cloudSync[key].replace(/:\/\/([^@]+)@/, '://***@');
+        redacted.cloudSync[key] = maskUrl(redacted.cloudSync[key]);
       }
     }
   }
@@ -1549,7 +1559,7 @@ async function initRepo() {
 
       // Handle remote_url from config.json
       if (config.remote_url && config.remote_url.trim() !== '' && config.remote_url !== runtimeSettings.cloudSync.remoteUrl) {
-        log.info(`[init] Remote URL from config: ${config.remote_url}`);
+        log.info(`[init] Remote URL from config: ${maskUrl(config.remote_url)}`);
         runtimeSettings.cloudSync.remoteUrl = config.remote_url;
 
         // Auto-detect provider if not set
@@ -1776,7 +1786,7 @@ async function initRepo() {
 
     // Apply pending remote update from config
     if (global.pendingRemoteUpdate && runtimeSettings.cloudSync.remoteUrl) {
-      log.info(`[init] Applying pending remote URL update: ${runtimeSettings.cloudSync.remoteUrl}`);
+      log.info(`[init] Applying pending remote URL update: ${maskUrl(runtimeSettings.cloudSync.remoteUrl)}`);
       const remoteResult = await setupGitRemote(runtimeSettings.cloudSync.remoteUrl, runtimeSettings.cloudSync.authToken);
       if (remoteResult.success) {
         log.info('[init] Successfully updated git remote from config');
@@ -5113,7 +5123,10 @@ app.post('/api/cloud-sync/pull', async (req, res) => {
 // Save cloud sync settings
 app.post('/api/cloud-sync/settings', async (req, res) => {
   try {
-    log.debug('[cloud-sync settings] Received request:', JSON.stringify(req.body, null, 2));
+    const sanitizedBody = { ...req.body };
+    if (sanitizedBody.remoteUrl) sanitizedBody.remoteUrl = maskUrl(sanitizedBody.remoteUrl);
+    if (sanitizedBody.authToken) sanitizedBody.authToken = '***';
+    log.debug('[cloud-sync settings] Received request:', JSON.stringify(sanitizedBody, null, 2));
     const { enabled, remoteUrl, authToken, authUser, pushFrequency, includeSecrets, ignoreSslErrors, authProvider, pullBeforePush, pullRebase, branch } = req.body;
 
     // Update basic settings
@@ -5148,14 +5161,14 @@ app.post('/api/cloud-sync/settings', async (req, res) => {
       } else if (runtimeSettings.cloudSync.githubRemoteUrl) {
         // Restore stored GitHub URL
         effectiveUrl = runtimeSettings.cloudSync.githubRemoteUrl;
-        log.debug('[cloud-sync settings] Restored GitHub URL:', effectiveUrl);
+        log.debug('[cloud-sync settings] Restored GitHub URL:', maskUrl(effectiveUrl));
       } else {
         // Fallback: check if current remoteUrl is a GitHub URL (migration case)
         const currentUrl = runtimeSettings.cloudSync.remoteUrl || '';
         if (currentUrl.includes('github.com')) {
           effectiveUrl = currentUrl;
           runtimeSettings.cloudSync.githubRemoteUrl = currentUrl;
-          log.debug('[cloud-sync settings] Migrated GitHub URL from remoteUrl:', effectiveUrl);
+          log.debug('[cloud-sync settings] Migrated GitHub URL from remoteUrl:', maskUrl(effectiveUrl));
         } else {
           log.debug('[cloud-sync settings] No GitHub URL found - user needs to connect GitHub');
         }
@@ -5169,14 +5182,14 @@ app.post('/api/cloud-sync/settings', async (req, res) => {
       } else if (runtimeSettings.cloudSync.customRemoteUrl) {
         // Restore stored custom URL
         effectiveUrl = runtimeSettings.cloudSync.customRemoteUrl;
-        log.debug('[cloud-sync settings] Restored Custom URL:', effectiveUrl);
+        log.debug('[cloud-sync settings] Restored Custom URL:', maskUrl(effectiveUrl));
       } else {
         // Fallback: check if current remoteUrl is NOT a GitHub URL
         const currentUrl = runtimeSettings.cloudSync.remoteUrl || '';
         if (currentUrl && !currentUrl.includes('github.com')) {
           effectiveUrl = currentUrl;
           runtimeSettings.cloudSync.customRemoteUrl = currentUrl;
-          log.debug('[cloud-sync settings] Migrated Custom URL from remoteUrl:', effectiveUrl);
+          log.debug('[cloud-sync settings] Migrated Custom URL from remoteUrl:', maskUrl(effectiveUrl));
         }
       }
     }
