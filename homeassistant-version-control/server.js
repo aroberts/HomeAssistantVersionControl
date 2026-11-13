@@ -74,6 +74,7 @@ const FILE_ENV_ALLOWLIST = new Set([
   'CLOUD_SYNC_AUTH_PROVIDER', 'CLOUD_SYNC_PUSH_FREQUENCY',
   'CLOUD_SYNC_PULL_BEFORE_PUSH', 'CLOUD_SYNC_PULL_REBASE', 'CLOUD_SYNC_INCLUDE_SECRETS',
   'CLOUD_SYNC_BRANCH',
+  'INCLUDE_EXTENSIONS', 'EXCLUDE_FILES', 'INCLUDE_STORAGE', 'ADDITIONAL_PATHS',
 ]);
 for (const baseName of FILE_ENV_ALLOWLIST) {
   if (process.env[baseName]) continue; // explicit var takes precedence
@@ -550,6 +551,10 @@ const RUNTIME_SETTINGS_SCHEMA = {
     min: 50,
     max: 10000,
     envKey: 'MAX_COMMITS'
+  },
+  additionalPaths: {
+    type: 'list',
+    envKey: 'ADDITIONAL_PATHS'
   }
 };
 
@@ -583,6 +588,13 @@ function parseEnvVarValue(key, schema, rawValue) {
       const match = schema.values.find(v => v.toLowerCase() === normalized);
       if (match) return { valid: true, value: match };
       return { valid: false, error: `Expected one of [${schema.values.join(', ')}], got: '${rawValue}'` };
+    }
+    case 'list': {
+      const items = trimmed.split(',')
+        .map(item => item.trim())
+        .filter(item => item.length > 0);
+      if (items.length === 0) return { valid: false, error: `Expected comma-separated list, got: '${rawValue}'` };
+      return { valid: true, value: items };
     }
     default:
       return { valid: false, error: `Unknown type: ${schema.type}` };
@@ -643,6 +655,30 @@ function loadSettingsFromEnv() {
 
   if (Object.keys(cloudSyncOverrides).length > 0) {
     settings.cloudSync = cloudSyncOverrides;
+  }
+
+  // File-tracking env vars (nested under runtimeSettings.extensions)
+  const EXTENSIONS_ENV_MAP = {
+    include: { envKey: 'INCLUDE_EXTENSIONS', type: 'list' },
+    exclude: { envKey: 'EXCLUDE_FILES',      type: 'list' },
+    storage: { envKey: 'INCLUDE_STORAGE',    type: 'list' },
+  };
+
+  const extensionsOverrides = {};
+  for (const [field, schema] of Object.entries(EXTENSIONS_ENV_MAP)) {
+    const envValue = process.env[schema.envKey];
+    if (envValue === undefined) continue;
+    const result = parseEnvVarValue(field, schema, envValue);
+    if (result.valid) {
+      extensionsOverrides[field] = result.value;
+      sources[`extensions.${field}`] = `env: ${schema.envKey}`;
+    } else {
+      log.debug(`[init] Warning: Invalid ${schema.envKey}='${envValue}', ${result.error}.`);
+    }
+  }
+
+  if (Object.keys(extensionsOverrides).length > 0) {
+    settings.extensions = extensionsOverrides;
   }
 
   return { settings, sources };
@@ -1123,6 +1159,10 @@ async function loadRuntimeSettings() {
   if (envResult.settings.cloudSync) {
     runtimeSettings.cloudSync = { ...runtimeSettings.cloudSync, ...envResult.settings.cloudSync };
     delete envResult.settings.cloudSync;
+  }
+  if (envResult.settings.extensions) {
+    runtimeSettings.extensions = { ...runtimeSettings.extensions, ...envResult.settings.extensions };
+    delete envResult.settings.extensions;
   }
   runtimeSettings = { ...runtimeSettings, ...envResult.settings };
   Object.assign(settingSources, envResult.sources);

@@ -256,6 +256,10 @@ For containerized deployments (especially when not persisting the `/data` direct
 | `LOG_LEVEL` | Log verbosity | String | `error`, `warn`, `info`, `debug` | `info` |
 | `LIMIT_HISTORY` | Limit History | Boolean | `true`, `false`, `yes`, `no`, `1`, `0` | `false` |
 | `MAX_COMMITS` | Max Commits | Number | 50 - 10000 | `500` |
+| `INCLUDE_EXTENSIONS` | Included Extensions | List | Comma-separated (e.g. `yaml,yml,conf`) | `yaml,yml` |
+| `EXCLUDE_FILES` | Excluded Files/Folders | List | Comma-separated (e.g. `backups,secrets.yaml`) | `secrets.yaml` |
+| `INCLUDE_STORAGE` | Included .storage patterns | List | Comma-separated (e.g. `lovelace,core.entity_registry`) | `lovelace*` |
+| `ADDITIONAL_PATHS` | Additional Watch Paths | List | Comma-separated (e.g. `/share,/media`) | `[]` |
 
 **Log levels:** At `info` (the default), you'll see startup events, commits, restores, and push/pull results. Set to `debug` to include file watcher events, cache refreshes, retention calculation details, and other operational chatter. Set to `warn` or `error` to suppress everything except problems.
 
