@@ -2428,6 +2428,7 @@ app.post('/api/git/add-all-and-commit', async (req, res) => {
     const commitMessage = 'Manual commit: Add all config files and stage changes';
     await gitCommit(commitMessage);
     log.info(`[add-all-and-commit] Committed: ${commitMessage}`);
+    await triggerAutoPushIfConfigured();
     res.json({ success: true, message: `All ${configFiles.length} config files added and committed.` });
   } catch (error) {
     log.error('[add-all-and-commit] Error:', error);
@@ -3169,17 +3170,7 @@ function initializeWatcher() {
         }
 
         // Cloud sync push if enabled and configured for every commit
-        if (runtimeSettings.cloudSync.enabled &&
-          runtimeSettings.cloudSync.pushFrequency === 'every_commit' &&
-          runtimeSettings.cloudSync.remoteUrl) {
-          log.debug('[watcher] Running cloud sync push after commit...');
-          try {
-            await setupGitRemote(runtimeSettings.cloudSync.remoteUrl, runtimeSettings.cloudSync.authToken, runtimeSettings.cloudSync.authUser);
-            await pushToRemote(runtimeSettings.cloudSync.includeSecrets);
-          } catch (e) {
-            log.error('[watcher] Cloud sync push failed:', e.message);
-          }
-        }
+        await triggerAutoPushIfConfigured();
 
         // Clean up the timer reference
         debounceTimers.delete(filePath);
@@ -4450,6 +4441,24 @@ async function configureSecretsTracking(include) {
 
   } catch (error) {
     log.error('[cloud-sync] Error configuring secrets:', error);
+  }
+}
+
+/**
+ * Push to the cloud sync remote if pushFrequency is 'every_commit'.
+ * Failures are logged and swallowed so they never break the commit path.
+ */
+async function triggerAutoPushIfConfigured() {
+  const cs = runtimeSettings.cloudSync;
+  if (!cs.enabled || cs.pushFrequency !== 'every_commit' || !cs.remoteUrl) {
+    return;
+  }
+  log.debug('[cloud-sync] Running auto push after commit...');
+  try {
+    await setupGitRemote(cs.remoteUrl, cs.authToken, cs.authUser);
+    await pushToRemote(cs.includeSecrets);
+  } catch (e) {
+    log.error('[cloud-sync] Auto push failed:', e.message);
   }
 }
 
