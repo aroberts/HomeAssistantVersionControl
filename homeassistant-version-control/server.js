@@ -2983,6 +2983,27 @@ function shouldIgnoreWatchPath(filePath) {
     return true;
   }
 
+  // Handle user-configured exclusions (#29)
+  const excludes = runtimeSettings.extensions.exclude || [];
+  if (excludes.length > 0) {
+    // Convert absolute path to relative for prefix matching
+    const normalizedPath = filePath.replace(/\\/g, '/');
+    let relativePath = normalizedPath;
+    if (normalizedPath === CONFIG_PATH) {
+      relativePath = '';
+    } else if (normalizedPath.startsWith(CONFIG_PATH + '/')) {
+      relativePath = normalizedPath.substring(CONFIG_PATH.length + 1);
+    }
+
+    for (const excludePath of excludes) {
+      // Handle directory prefixes (e.g. "www/") or exact matches
+      const normalizedExclude = excludePath.replace(/\\/g, '/').replace(/\/$/, '');
+      if (relativePath === normalizedExclude || relativePath.startsWith(normalizedExclude + '/')) {
+        return true;
+      }
+    }
+  }
+
   // Avoid infinite loops - if path has too many repetitions of /config/
   const configCount = (filePath.match(/\/config\//g) || []).length;
   if (configCount > 3) {
