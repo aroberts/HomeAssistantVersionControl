@@ -239,6 +239,12 @@ async function loadSettings() {
         document.getElementById('maxCommits').value = settings.maxCommits;
         localStorage.setItem('maxCommits', settings.maxCommits);
 
+        // Auto-reload Home Assistant
+        const autoReloadToggle = document.getElementById('autoReload');
+        if (autoReloadToggle) {
+          autoReloadToggle.checked = settings.autoReload === true;
+        }
+
         // Legacy Arrow Direction
         if (settings.legacyArrowDirection !== undefined) {
           reverseArrowDirection = settings.legacyArrowDirection === true;
@@ -1354,6 +1360,8 @@ async function saveSettings() {
   const historyRetention = document.getElementById('historyRetention').checked;
   const limitHistory = document.getElementById('limitHistory').checked;
   const maxCommits = parseInt(document.getElementById('maxCommits').value);
+  const autoReloadEl = document.getElementById('autoReload');
+  const autoReload = autoReloadEl ? autoReloadEl.checked : false;
 
   const diffViewSplit = document.getElementById('diffViewSplit').checked;
   const newDiffViewFormat = diffViewSplit ? 'split' : 'unified';
@@ -1393,6 +1401,7 @@ async function saveSettings() {
         retentionUnit,
         limitHistory,
         maxCommits,
+        autoReload,
         extensions: currentExtensions,
         legacyArrowDirection: reverseArrowDirection
       })

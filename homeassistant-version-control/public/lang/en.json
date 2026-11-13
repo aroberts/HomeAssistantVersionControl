@@ -152,6 +152,8 @@
     "show_changed_only_desc": "Filter timeline to show only versions with file changes",
     "debounce_time": "Save Delay",
     "debounce_time_desc": "Time to wait before creating a version after file changes",
+    "auto_reload": "Auto-reload Home Assistant",
+    "auto_reload_desc": "Validate config and reload changed components after each automatic backup",
     "history_retention": "Clean Up History",
     "history_retention_desc": "Merge versions older than a certain time period",
     "limit_history": "Max Commits to Show",

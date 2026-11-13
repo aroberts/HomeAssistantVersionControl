@@ -63,7 +63,8 @@
     "additional_paths": [
       "str"
     ],
-    "remote_url": "str?"
+    "remote_url": "str?",
+    "auto_reload": "bool?"
   },
   "healthcheck": {
     "test": [

@@ -7,6 +7,7 @@ Home Assistant Version Control provides complete version history for your setup.
 
 ##  What's New!
 
+*   **Auto-reload Changed Components:** Optionally validate the config and reload the Home Assistant domain that changed after each automatic backup. Off by default.
 *   **Track Custom Paths:** Easily include folders like `/share` and `/media` in your version history. Perfect for tracking external configs (like Frigate) using Home Assistant mounts.
 *   **More Than Just Lovelace:** Explicitly whitelist and version control specific files/patterns in the `.storage` directory (e.g., core.entity_registry).
 *   **Keep Your Own Extensions:** Configure any file format to track and backup (.sh, .py, .json, etc.) directly in the config tab.
@@ -222,6 +223,7 @@ The application can be configured through the web UI Settings page or via enviro
 | **Retention Value** | How much history to keep (number of days/hours/weeks/months or versions) | `90` |
 | **Retention Unit** | Time unit for retention (hours, days, weeks, months) | `days` |
 | **Max Commits to Show** | Limit the number of recent versions to display (for performance) | `Disabled` |
+| **Auto-reload Home Assistant** | Validate config and reload changed components after each automatic backup | `Disabled` |
 
 #### Environment Variable Configuration
 
@@ -251,6 +253,7 @@ For containerized deployments (especially when not persisting the `/data` direct
 | `EXCLUDE_FILES` | Excluded Files/Folders | List | Comma-separated (e.g. `backups,secrets.yaml`) | `secrets.yaml` |
 | `INCLUDE_STORAGE` | Included .storage patterns | List | Comma-separated (e.g. `lovelace,core.entity_registry`) | `lovelace*` |
 | `ADDITIONAL_PATHS` | Additional Watch Paths | List | Comma-separated (e.g. `/share,/media`) | `[]` |
+| `AUTO_RELOAD` | Auto-reload Home Assistant | Boolean | `true`, `false`, `yes`, `no`, `1`, `0` | `false` |
 | `LEGACY_ARROW_DIRECTION` | Legacy Arrow Direction (◀ = newer) | Boolean | `true`, `false`, `yes`, `no`, `1`, `0` | `false` |
 
 **Notes:**
@@ -325,7 +328,10 @@ Invalid values will trigger warnings:
 2.  **Stabilization:** When a change is detected, it waits **2 seconds** to ensure Home Assistant has finished writing the file (preventing corruption).
 3.  **Debounce:** It then waits for your configured **Debounce Time** (default 5s) to batch related edits into a single commit.
 4.  **Snapshot:** A Git commit is created with a timestamp.
-5.  **Cleanup:** If enabled, old snapshots are consolidated periodically.
+5.  **Reload:** If enabled, Home Assistant validates the config and the changed components are reloaded. An invalid config skips the reload.
+6.  **Cleanup:** If enabled, old snapshots are consolidated periodically.
+
+Auto-reload maps standard filenames to their reload service. Automations, scripts, scenes, groups, inputs, timers, counters, template sensors and switches, command_line, HomeKit, and `customize.yaml` are covered. Files pulled in through custom `!include` names are not mapped. It requires the Home Assistant API (add-on mode, or `HA_URL` plus `SUPERVISOR_TOKEN` in Docker).
 
 ### What is Tracked?
 The app automatically tracks configuration files while ignoring system files.

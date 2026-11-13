@@ -229,8 +229,22 @@
               </p>
             </div>
 
-
-
+            <div class="setting-item" style="margin-bottom: 20px;">
+              <label style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
+                <div>
+                  <span style="color: var(--text-primary); font-size: 14px;"
+                    data-i18n="settings.auto_reload">Auto-reload Home Assistant</span>
+                </div>
+                <div class="toggle-switch">
+                  <input type="checkbox" id="autoReload" style="display: none;">
+                  <label for="autoReload" class="toggle-slider"></label>
+                </div>
+              </label>
+              <p style="color: var(--text-secondary); font-size: 12px; margin-top: 6px; margin-left: 2px;"
+                data-i18n="settings.auto_reload_desc">
+                Validate config and reload changed components after each automatic backup
+              </p>
+            </div>
 
             <div class="setting-item" style="margin-bottom: 20px;">
               <label style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
