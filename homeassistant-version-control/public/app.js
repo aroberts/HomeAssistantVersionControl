@@ -239,6 +239,16 @@ async function loadSettings() {
         document.getElementById('maxCommits').value = settings.maxCommits;
         localStorage.setItem('maxCommits', settings.maxCommits);
 
+        // Legacy Arrow Direction
+        if (settings.legacyArrowDirection !== undefined) {
+          reverseArrowDirection = settings.legacyArrowDirection === true;
+          const reverseArrowDirectionToggle = document.getElementById('reverseArrowDirection');
+          if (reverseArrowDirectionToggle) {
+            reverseArrowDirectionToggle.checked = reverseArrowDirection;
+          }
+          localStorage.setItem('reverseArrowDirection', reverseArrowDirection);
+        }
+
         // Update UI state
         handleRetentionToggle();
         handleLimitHistoryToggle();
@@ -1141,6 +1151,17 @@ function toggleReverseArrowDirection(isChecked) {
   localStorage.setItem('reverseArrowDirection', isChecked);
   // Refresh current view so buttons re-render with correct direction/disabled state
   refreshCurrentView();
+
+  // Save to server
+  fetch(`${API}/runtime-settings`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      legacyArrowDirection: isChecked
+    })
+  }).catch(err => console.error('Error saving legacyArrowDirection to server:', err));
 }
 
 function refreshCurrentView() {
@@ -1372,7 +1393,8 @@ async function saveSettings() {
         retentionUnit,
         limitHistory,
         maxCommits,
-        extensions: currentExtensions
+        extensions: currentExtensions,
+        legacyArrowDirection: reverseArrowDirection
       })
     });
 

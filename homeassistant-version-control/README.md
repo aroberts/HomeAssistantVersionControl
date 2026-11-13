@@ -251,6 +251,7 @@ For containerized deployments (especially when not persisting the `/data` direct
 | `EXCLUDE_FILES` | Excluded Files/Folders | List | Comma-separated (e.g. `backups,secrets.yaml`) | `secrets.yaml` |
 | `INCLUDE_STORAGE` | Included .storage patterns | List | Comma-separated (e.g. `lovelace,core.entity_registry`) | `lovelace*` |
 | `ADDITIONAL_PATHS` | Additional Watch Paths | List | Comma-separated (e.g. `/share,/media`) | `[]` |
+| `LEGACY_ARROW_DIRECTION` | Legacy Arrow Direction (◀ = newer) | Boolean | `true`, `false`, `yes`, `no`, `1`, `0` | `false` |
 
 **Notes:**
 - Boolean values are case-insensitive and accept: `true`/`false`, `yes`/`no`, `1`/`0`

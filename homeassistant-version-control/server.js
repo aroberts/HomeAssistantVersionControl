@@ -75,6 +75,7 @@ const FILE_ENV_ALLOWLIST = new Set([
   'CLOUD_SYNC_PULL_BEFORE_PUSH', 'CLOUD_SYNC_PULL_REBASE', 'CLOUD_SYNC_INCLUDE_SECRETS',
   'CLOUD_SYNC_BRANCH',
   'INCLUDE_EXTENSIONS', 'EXCLUDE_FILES', 'INCLUDE_STORAGE', 'ADDITIONAL_PATHS',
+  'LEGACY_ARROW_DIRECTION',
 ]);
 for (const baseName of FILE_ENV_ALLOWLIST) {
   if (process.env[baseName]) continue; // explicit var takes precedence
@@ -508,7 +509,8 @@ let runtimeSettings = {
     exclude: ['secrets.yaml'], // Specific files to ignore (always ignored regardless of extension)
     storage: ['lovelace', 'lovelace_dashboards', 'lovelace_resources', 'lovelace.*'] // Files in .storage to track
   },
-  additionalPaths: []
+  additionalPaths: [],
+  legacyArrowDirection: false
 };
 
 // Schema for runtime settings with validation rules and environment variable mapping
@@ -555,6 +557,10 @@ const RUNTIME_SETTINGS_SCHEMA = {
   additionalPaths: {
     type: 'list',
     envKey: 'ADDITIONAL_PATHS'
+  },
+  legacyArrowDirection: {
+    type: 'boolean',
+    envKey: 'LEGACY_ARROW_DIRECTION'
   }
 };
 
@@ -1927,6 +1933,10 @@ app.post('/api/runtime-settings', async (req, res) => {
 
     if (newSettings.historyRetention !== undefined) {
       runtimeSettings.historyRetention = newSettings.historyRetention;
+    }
+
+    if (newSettings.legacyArrowDirection !== undefined) {
+      runtimeSettings.legacyArrowDirection = !!newSettings.legacyArrowDirection;
     }
 
     if (newSettings.retentionType !== undefined) {
