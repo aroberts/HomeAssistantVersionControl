@@ -1332,6 +1332,40 @@ async function getConfigFiles() {
 }
 
 /**
+ * Filter an array of file paths against user exclusions and git ignore rules
+ * @param {Array<string>} files Array of file paths
+ * @returns {Promise<Array<string>>} Array of non-ignored file paths
+ */
+async function filterGitIgnoredFiles(files) {
+  if (!files || files.length === 0) return [];
+
+  // 1. Filter out files matching internal ignore rules & user exclusions
+  const candidates = files.filter(file => !shouldIgnoreWatchPath(file));
+  if (candidates.length === 0) return [];
+
+  // 2. Filter out files ignored by git (.gitignore / .git/info/exclude).
+  // Batched to stay well under the OS argv limit on large config trees.
+  // check-ignore exits 1 when nothing in the batch is ignored, so read
+  // stdout from the error as well.
+  const BATCH_SIZE = 500;
+  const ignoredSet = new Set();
+  for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
+    const batch = candidates.slice(i, i + BATCH_SIZE);
+    let stdout = '';
+    try {
+      ({ stdout } = await gitExec(['check-ignore', '--', ...batch]));
+    } catch (e) {
+      stdout = e.stdout || '';
+    }
+    for (const line of stdout.split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed) ignoredSet.add(trimmed);
+    }
+  }
+  return candidates.filter(file => !ignoredSet.has(file));
+}
+
+/**
  * Find all nested .git directories
  * @returns {Promise<Array<string>>} List of relative paths to directories containing .git
  */
@@ -2380,9 +2414,12 @@ app.post('/api/git/add-all-and-commit', async (req, res) => {
   try {
     ensureGitInitialized();
     log.debug('[add-all-and-commit] Adding all config files and committing...');
-    const configFiles = await getConfigFiles();
-    log.debug(`[add-all-and-commit] Found ${configFiles.length} config files to add`);
-    await gitAdd(configFiles);
+    const rawConfigFiles = await getConfigFiles();
+    const configFiles = await filterGitIgnoredFiles(rawConfigFiles);
+    log.debug(`[add-all-and-commit] Found ${configFiles.length} non-ignored config files to add`);
+    if (configFiles.length > 0) {
+      await gitAdd(configFiles);
+    }
     const status = await gitStatus();
     if (status.isClean()) {
       log.info('[add-all-and-commit] No changes to commit.');
