@@ -66,7 +66,7 @@ import {
 // Scoped to known app vars to avoid clobbering unrelated _FILE vars (e.g. NPM_CONFIG_FILE).
 const FILE_ENV_ALLOWLIST = new Set([
   'SUPERVISOR_TOKEN', 'HASSIO_TOKEN', 'HA_URL',
-  'CONFIG_PATH', 'PORT', 'HOST', 'LOG_LEVEL',
+  'CONFIG_PATH', 'DATA_PATH', 'PORT', 'HOST', 'LOG_LEVEL',
   'DEBOUNCE_TIME', 'DEBOUNCE_TIME_UNIT',
   'HISTORY_RETENTION', 'RETENTION_TYPE', 'RETENTION_VALUE', 'RETENTION_UNIT',
   'AI_GENERATE_COMMIT_MESSAGES', 'AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL', 'AI_PROMPT',
@@ -97,6 +97,7 @@ const PORT = process.env.PORT || 54001;
 const HOST = process.env.HOST || '::';
 const EXTERNAL_MIRROR_DIR = '.havc_external';
 const ALLOWED_ADDITIONAL_PATH_PREFIXES = ['/share', '/media', '/ssl', '/config', '/addon_configs'];
+const DATA_DIR = process.env.DATA_PATH || '/data';
 
 // Ensure HOME is set for git
 if (!process.env.HOME) {
@@ -1175,7 +1176,7 @@ async function loadRuntimeSettings() {
 
   // Layer 2: Apply file settings (highest precedence)
   try {
-    const settingsPath = '/data/runtime-settings.json';
+    const settingsPath = path.join(DATA_DIR, 'runtime-settings.json');
     try {
       await fsPromises.access(settingsPath, fs.constants.F_OK);
       const settingsData = await fsPromises.readFile(settingsPath, 'utf-8');
@@ -1243,7 +1244,7 @@ async function loadRuntimeSettings() {
  */
 async function saveRuntimeSettings() {
   try {
-    const settingsPath = '/data/runtime-settings.json';
+    const settingsPath = path.join(DATA_DIR, 'runtime-settings.json');
     log.debug(`[settings] Saving settings to ${settingsPath}...`);
 
     await fsPromises.writeFile(settingsPath, JSON.stringify(runtimeSettings, null, 2), 'utf-8');
@@ -1606,7 +1607,7 @@ async function initRepo() {
 
     // Also check for config.json in the data directory
     try {
-      const configData = await fsPromises.readFile('/data/options.json', 'utf-8');
+      const configData = await fsPromises.readFile(path.join(DATA_DIR, 'options.json'), 'utf-8');
       const config = JSON.parse(configData);
       if (config.liveConfigPath) {
         CONFIG_PATH = config.liveConfigPath;
