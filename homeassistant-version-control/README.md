@@ -159,7 +159,7 @@ Access the interface at `http://localhost:54001`.
 
 ### App Options
 
-In Home Assistant app mode, you can track files outside `/config` by setting `additional_paths` in the app configuration.
+In Home Assistant app mode, you can track files outside `/config` by setting `additional_paths` in the app configuration. The add-on also has access to `/addon_configs` so configurations owned by other add-ons can be tracked.
 
 Example:
 
@@ -174,7 +174,7 @@ additional_paths:
 ```
 
 Notes:
-- Paths must be absolute and currently support `/share`, `/media`, `/ssl`, and `/config` prefixes.
+- Paths must be absolute and currently support `/share`, `/media`, `/ssl`, `/config`, and `/addon_configs` prefixes.
 - Paths under `/config` are skipped because `/config` is already tracked automatically.
 - Files are still filtered by `include_extensions` and `exclude_files`.
 - For `.conf` files, add `conf` to `include_extensions`.
